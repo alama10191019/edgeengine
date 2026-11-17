@@ -607,7 +607,8 @@ def poly_markets():
                 try:
                     slug = ((m.get("events") or [{}])[0].get("slug")) or m.get("slug") or ""
                     out.append({"q": m.get("question") or "", "kind": m.get("sportsMarketType") or kind, "slug": slug, "start": (m.get("gameStartTime") or "").replace(" ", "T").replace("+00", "Z"),
-                                "outs": json.loads(m.get("outcomes") or "[]"), "px": [fnum(x) for x in json.loads(m.get("outcomePrices") or "[]")], "v24": fnum(m.get("volume24hr"))})
+                                "outs": json.loads(m.get("outcomes") or "[]"), "px": [fnum(x) for x in json.loads(m.get("outcomePrices") or "[]")], "v24": fnum(m.get("volume24hr")),
+                                "bid": fnum(m.get("bestBid")), "ask": fnum(m.get("bestAsk"))})
                 except Exception:
                     continue
             if len(ms) < 100:
@@ -635,7 +636,7 @@ def kalshi_events(series):
             for m in e.get("markets") or []:
                 bid, ask, last = fnum(m.get("yes_bid_dollars")), fnum(m.get("yes_ask_dollars")), fnum(m.get("last_price_dollars"))
                 px = (bid + ask) / 2 if bid > 0 and ask > 0 and ask - bid <= 0.1 else last
-                mk.append({"name": m.get("yes_sub_title") or "", "sfx": m["ticker"].rsplit("-", 1)[-1], "px": px, "v24": fnum(m.get("volume_24h_fp"))})
+                mk.append({"name": m.get("yes_sub_title") or "", "sfx": m["ticker"].rsplit("-", 1)[-1], "px": px, "ask": ask, "v24": fnum(m.get("volume_24h_fp"))})
             out.append({"ticker": e["event_ticker"], "series": series, "title": e.get("title") or "", "day": day, "markets": mk, "v24": sum(x["v24"] for x in mk)})
         except Exception:
             continue
@@ -680,7 +681,7 @@ def fetch_markets(games, now):
         for slug, ms in by_slug.items():
             if not start_close(ms[0]["start"], g["date"]):
                 continue
-            res = {}
+            res = {}; ask = {}
             for m in ms:
                 if len(m["outs"]) != 2 or len(m["px"]) != 2:
                     continue
@@ -688,20 +689,22 @@ def fetch_markets(games, now):
                     q = m["q"]
                     if q.startswith("Will ") and " win on " in q:
                         nm = nrm(q[5:q.index(" win on ")])
-                        if nm in hk: res["home"] = m["px"][0]
-                        elif nm in ak: res["away"] = m["px"][0]
+                        if nm in hk: res["home"] = m["px"][0]; ask["home"] = m["ask"]
+                        elif nm in ak: res["away"] = m["px"][0]; ask["away"] = m["ask"]
                     elif q.startswith("Will ") and " end in a draw" in q and " vs. " in q:
                         a_, b_ = q[5:q.index(" end in a draw")].split(" vs. ", 1)
                         if {nrm(a_) in hk or nrm(a_) in ak, nrm(b_) in hk or nrm(b_) in ak} == {True}:
-                            res["draw"] = m["px"][0]
+                            res["draw"] = m["px"][0]; ask["draw"] = m["ask"]
                 else:
                     o0, o1 = nrm(m["outs"][0]), nrm(m["outs"][1])
-                    if o0 in hk and o1 in ak: res["home"], res["away"] = m["px"][0], m["px"][1]
-                    elif o0 in ak and o1 in hk: res["away"], res["home"] = m["px"][0], m["px"][1]
+                    a0, a1 = m["ask"], (1 - m["bid"] if m["bid"] > 0 else 0)   # cost to buy each side
+                    if o0 in hk and o1 in ak: res["home"], res["away"] = m["px"][0], m["px"][1]; ask["home"], ask["away"] = a0, a1
+                    elif o0 in ak and o1 in hk: res["away"], res["home"] = m["px"][0], m["px"][1]; ask["away"], ask["home"] = a0, a1
             if "home" in res and "away" in res and (g["sp"] != "soccer" or "draw" in res):
                 tot = sum(res.values())
                 if 0.9 <= tot <= 1.1:
-                    g.setdefault("mk", {})["poly"] = {**{k: round(v / tot, 3) for k, v in res.items()}, "slug": slug, "v24": round(sum(m["v24"] for m in ms))}
+                    g.setdefault("mk", {})["poly"] = {**{k: round(v / tot, 3) for k, v in res.items()}, "slug": slug, "v24": round(sum(m["v24"] for m in ms)),
+                                                        "ask": {k: round(v, 3) for k, v in ask.items() if 0.01 < v < 0.99}}
                     M["matched"]["polymarket"] += 1
                     break
     # ---- Kalshi: game prices + trending
@@ -721,16 +724,17 @@ def fetch_markets(games, now):
         for e in k_all:
             if e["sp"] != g["sp"] or abs((datetime.fromisoformat(e["day"]).date() - gd).days) > 1:
                 continue
-            res = {}
+            res = {}; ask = {}
             for m in e["markets"]:
                 nm = nrm(m["name"])
-                if nm in ("tie", "draw"): res["draw"] = m["px"]
-                elif nm in hk or (m["sfx"] == ha and nm not in ak): res["home"] = m["px"]
-                elif nm in ak or (m["sfx"] == aa and nm not in hk): res["away"] = m["px"]
+                if nm in ("tie", "draw"): res["draw"] = m["px"]; ask["draw"] = m["ask"]
+                elif nm in hk or (m["sfx"] == ha and nm not in ak): res["home"] = m["px"]; ask["home"] = m["ask"]
+                elif nm in ak or (m["sfx"] == aa and nm not in hk): res["away"] = m["px"]; ask["away"] = m["ask"]
             if "home" in res and "away" in res and len(e["markets"]) == len(res):
                 tot = sum(res.values())
                 if 0.85 <= tot <= 1.15:
-                    g.setdefault("mk", {})["kalshi"] = {**{k: round(v / tot, 3) for k, v in res.items()}, "ticker": e["ticker"], "series": e["series"], "v24": round(e["v24"])}
+                    g.setdefault("mk", {})["kalshi"] = {**{k: round(v / tot, 3) for k, v in res.items()}, "ticker": e["ticker"], "series": e["series"], "v24": round(e["v24"]),
+                                                          "ask": {k: round(v, 3) for k, v in ask.items() if 0.01 < v < 0.99}}
                     M["matched"]["kalshi"] += 1
                     break
     for e in sorted(k_all, key=lambda e: -e["v24"])[:20]:
@@ -770,6 +774,74 @@ def fetch_markets(games, now):
         if g is not None:
             g["mk"].setdefault("smart", []).append({"title": title, "out": out, "n": a["n"], "val": a["val"]})
     return M
+
+
+ODDS_API = "https://api.the-odds-api.com/v4/sports/"
+
+
+def fetch_odds_api(games, cache, now):
+    """Prices from many sportsbooks via The Odds API (licensed). Needs the ODDS_API_KEY environment variable.
+    Results are kept for ODDS_API_HOURS (default 20) so a free plan's monthly allowance is not used up."""
+    key = os.environ.get("ODDS_API_KEY", "").strip()
+    meta = {"enabled": bool(key), "asof": None, "remaining": None, "error": None, "matched": 0}
+    if not key:
+        return meta
+    hours = fnum(os.environ.get("ODDS_API_HOURS"), 20.0)
+    sports = [x.strip() for x in os.environ.get("ODDS_API_SPORTS", "americanfootball_nfl,basketball_nba,americanfootball_ncaaf,soccer_epl").split(",") if x.strip()]
+    cf = os.path.join(cache, "oddsapi.json.gz") if cache else None
+    store = None
+    if cf and os.path.exists(cf):
+        try:
+            store = json.loads(gzip.decompress(open(cf, "rb").read()))
+        except Exception:
+            store = None
+    fresh = store and (now - datetime.fromisoformat(store["t"])).total_seconds() < hours * 3600
+    if not fresh:
+        events = []
+        for sp in sports:
+            try:
+                req = urllib.request.Request(f"{ODDS_API}{sp}/odds/?regions=us&markets=h2h,spreads,totals&oddsFormat=american", headers={"x-api-key": key, "Accept": "application/json"})
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    meta["remaining"] = r.headers.get("x-requests-remaining")
+                    events += json.loads(r.read())
+            except Exception as ex:
+                meta["error"] = f"{sp}: {type(ex).__name__}"
+        if events:
+            store = {"t": now.isoformat(timespec="seconds"), "remaining": meta["remaining"], "events": events}
+            if cf:
+                os.makedirs(cache, exist_ok=True)
+                open(cf, "wb").write(gzip.compress(json.dumps(store, separators=(",", ":")).encode(), 6))
+    if not store:
+        return meta
+    meta["asof"] = store["t"]; meta["remaining"] = meta["remaining"] or store.get("remaining")
+    for g in games:
+        hk, ak = team_keys(g["home"]), team_keys(g["away"])
+        gt = datetime.fromisoformat(g["date"].replace("Z", "+00:00"))
+        for e in store["events"]:
+            try:
+                if abs((datetime.fromisoformat(e["commence_time"].replace("Z", "+00:00")) - gt).total_seconds()) > 3 * 3600:
+                    continue
+                if nrm(e["home_team"]) not in hk or nrm(e["away_team"]) not in ak:
+                    continue
+                ob = {"ml": {}, "spread": {}, "total": {}}
+                sp_line, tot_line = (g.get("odds") or {}).get("sp"), (g.get("odds") or {}).get("tot")
+                for b in e.get("bookmakers") or []:
+                    for m in b.get("markets") or []:
+                        for o in m.get("outcomes") or []:
+                            nm, price, pt = nrm(o.get("name")), o.get("price"), o.get("point")
+                            side = "home" if nm in hk else "away" if nm in ak else "draw" if nm == "draw" else None
+                            if m["key"] == "h2h" and side:
+                                ob["ml"].setdefault(side, {})[b["title"]] = price
+                            elif m["key"] == "spreads" and side in ("home", "away") and sp_line is not None and pt is not None and abs(pt - (sp_line if side == "home" else -sp_line)) < 0.01:
+                                ob["spread"].setdefault(side, {})[b["title"]] = price
+                            elif m["key"] == "totals" and nm in ("over", "under") and tot_line is not None and pt is not None and abs(pt - tot_line) < 0.01:
+                                ob["total"].setdefault(nm, {})[b["title"]] = price
+                if ob["ml"] or ob["spread"] or ob["total"]:
+                    g["ob"] = {k: v for k, v in ob.items() if v}; meta["matched"] += 1
+                break
+            except Exception:
+                continue
+    return meta
 
 
 LEDGER_KEYS = ("picks", "parlays", "perf", "daily", "parlay_perf", "log", "results", "trends", "blend")
@@ -929,6 +1001,7 @@ def run(args):
             if od.get("tot") is not None and od.get("tot_open") is not None and od["tot"] != od["tot_open"]:
                 tr.append(f"Total moved from {od['tot_open']:g} to {od['tot']:g}")
             games.append({"id": e["id"], "lg": lg, "sp": sec, "league": e.get("league") or LEAGUES[lg][1], "sgp": pr.get("sgp", []), "date": e["date"], "book": od.get("book"),
+                          "odds": {k: od.get(k) for k in ("ml_h", "ml_a", "ml_d", "sp", "sp_h", "sp_a", "tot", "tot_o", "tot_u") if od.get(k) is not None},
                           "home": {"n": e["home"]["name"], "a": e["home"]["abbr"], "rec": e["home"]["rec"], "elo": round(H["elo"]), "g": H["g"], "loc": e["home"].get("loc", ""), "nick": e["home"].get("nick", ""), "short": e["home"].get("short", "")},
                           "away": {"n": e["away"]["name"], "a": e["away"]["abbr"], "rec": e["away"]["rec"], "elo": round(A["elo"]), "g": A["g"], "loc": e["away"].get("loc", ""), "nick": e["away"].get("nick", ""), "short": e["away"].get("short", "")},
                           "proj": {"margin": round(pr["mu"], 1), "total": round(pr["tot"], 1), "p_h": round(pr["p_h"], 3), "p_d": round(pr["p_d"], 3), "p_a": round(pr["p_a"], 3)},
@@ -999,6 +1072,10 @@ def run(args):
         markets = fetch_markets(games, now)
     except Exception as ex:  # never let the optional market data break the picks
         markets = {"errors": [f"Prediction market data failed: {type(ex).__name__}"], "lb": {}, "traders": [], "shared": [], "poly_trending": [], "kalshi_trending": [], "matched": {}}
+    try:
+        books_meta = fetch_odds_api(games, args.cache, now)
+    except Exception as ex:
+        books_meta = {"enabled": True, "error": type(ex).__name__, "asof": None, "remaining": None, "matched": 0}
     recent = sorted([p for p in S["picks"].values() if p["st"] != "pending"], key=lambda p: p["d"], reverse=True)[:400]
     past_parlays = [{"key": k, "parlays": [p for p in v["parlays"] if p["st"] != "pending"]} for k, v in sorted(S["parlays"].items(), reverse=True)]
     model = {lg: {"league": LEAGUES[lg][1], "hfa": round(L["hfa"], 1), "sig": round(L["sig"], 2), "tsig": round(L["tsig"], 2), "avg": round(L["avg"], 2), "games": L["n"], "teams": len(L["teams"]),
@@ -1006,7 +1083,7 @@ def run(args):
     data = {"generated": now.isoformat(timespec="seconds"), "games": sorted(games, key=lambda g: g["date"]), "parlays": live_parlays, "perf": S["perf"],
             "daily": S["daily"], "backtest": S["backtest"], "recent": recent, "past_parlays": [p for p in past_parlays if p["parlays"]],
             "parlay_perf": S["parlay_perf"], "model": model, "log": S["log"][::-1], "calib": {k: {"a": v["a"], "n": v["n"]} for k, v in S["calib"].items()},
-            "blend": {k: v.get("w") for k, v in S["blend"].items()}, "default_blend": DEFAULT_BLEND, "soccer_days": SOCCER_DAYS, "markets": markets, "notices": notices}
+            "blend": {k: v.get("w") for k, v in S["blend"].items()}, "default_blend": DEFAULT_BLEND, "soccer_days": SOCCER_DAYS, "markets": markets, "notices": notices, "books_meta": books_meta}
     if args.data:
         json.dump(data, open(args.data, "w"), separators=(",", ":"))
     if args.template and args.out:  # single-file dashboard with the data baked in
