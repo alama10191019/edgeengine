@@ -135,7 +135,7 @@ def parse_event(e, lg):
         t = x["team"]
         out[x["homeAway"]] = {"id": t["id"], "name": t.get("displayName") or t.get("name"), "abbr": t.get("abbreviation") or (t.get("name") or "")[:3].upper(),
                               "score": to_int(x.get("score")), "rec": next((r.get("summary") for r in x.get("records", [])), None),
-                              "loc": t.get("location") or "", "nick": t.get("name") or "", "short": t.get("shortDisplayName") or ""}
+                              "loc": t.get("location") or "", "nick": t.get("name") or "", "short": t.get("shortDisplayName") or "", "color": t.get("color") or ""}
     if "home" not in out or "away" not in out:
         return None
     o = (c.get("odds") or [None])[0]
@@ -1256,10 +1256,10 @@ def run(args):
                 tr.append(f"Spread moved from {od['sp_open']:+g} to {od['sp']:+g} (home team line)")
             if od.get("tot") is not None and od.get("tot_open") is not None and od["tot"] != od["tot_open"]:
                 tr.append(f"Total moved from {od['tot_open']:g} to {od['tot']:g}")
-            games.append({"id": e["id"], "lg": lg, "sp": sec, "league": e.get("league") or LEAGUES[lg][1], "sgp": pr.get("sgp", []), "date": e["date"], "book": od.get("book"),
+            games.append({"id": e["id"], "lg": lg, "sp": sec, "league": e.get("league") or LEAGUES[lg][1], "sgp": pr.get("sgp", []), "date": e["date"], "book": od.get("book"), "neutral": bool(e.get("neutral")),
                           "odds": {k: od.get(k) for k in ("ml_h", "ml_a", "ml_d", "sp", "sp_h", "sp_a", "tot", "tot_o", "tot_u") if od.get(k) is not None},
-                          "home": {"id": e["home"]["id"], "n": e["home"]["name"], "a": e["home"]["abbr"], "rec": e["home"]["rec"], "elo": round(H["elo"]), "g": H["g"], "loc": e["home"].get("loc", ""), "nick": e["home"].get("nick", ""), "short": e["home"].get("short", "")},
-                          "away": {"id": e["away"]["id"], "n": e["away"]["name"], "a": e["away"]["abbr"], "rec": e["away"]["rec"], "elo": round(A["elo"]), "g": A["g"], "loc": e["away"].get("loc", ""), "nick": e["away"].get("nick", ""), "short": e["away"].get("short", "")},
+                          "home": {"id": e["home"]["id"], "n": e["home"]["name"], "a": e["home"]["abbr"], "rec": e["home"]["rec"], "elo": round(H["elo"]), "g": H["g"], "loc": e["home"].get("loc", ""), "nick": e["home"].get("nick", ""), "short": e["home"].get("short", ""), "c": e["home"].get("color", "")},
+                          "away": {"id": e["away"]["id"], "n": e["away"]["name"], "a": e["away"]["abbr"], "rec": e["away"]["rec"], "elo": round(A["elo"]), "g": A["g"], "loc": e["away"].get("loc", ""), "nick": e["away"].get("nick", ""), "short": e["away"].get("short", ""), "c": e["away"].get("color", "")},
                           "proj": {"margin": round(pr["mu"], 1), "total": round(pr["tot"], 1), "p_h": round(pr["p_h"], 3), "p_d": round(pr["p_d"], 3), "p_a": round(pr["p_a"], 3)},
                           "picks": sorted(picks, key=lambda x: -x["p"]), "trends": tr})
     if not games and (failed_total or stale):
