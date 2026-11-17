@@ -91,6 +91,7 @@ tr:hover td{background:color-mix(in srgb,var(--surface2) 60%,transparent)}
 .pcard .big span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
 .sg{display:grid;grid-template-columns:1fr 52px 58px 64px;gap:8px;align-items:center;padding:6px 0;border-top:1px dashed var(--line);font-size:13px}.sg .pct{font-size:14px}
 .mkrow{margin-top:8px;padding:6px 10px;border-radius:10px;border:1px dashed var(--line)}.mkl{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:2px 0;font-variant-numeric:tabular-nums}
+.bestcell{font-weight:800;color:var(--goodtx);background:color-mix(in srgb,var(--brand) 14%,transparent)!important}.bt{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
 .xl{color:inherit;text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--brand) 60%,transparent);text-underline-offset:2px}.xl:hover{color:var(--goodtx)}
 .sgp{margin-top:8px;padding:2px 10px 6px;border-radius:10px;background:color-mix(in srgb,var(--surface2) 70%,transparent)}
 .leg{display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-top:1px solid var(--line);font-size:13px}
@@ -168,7 +169,7 @@ footer{font-size:13px}
   header{padding:12px 14px 0}.topbar{backdrop-filter:none;background:var(--bg)}.topbar .in{padding:8px 14px}.sub{padding-top:2px}main{padding:14px 14px 170px}
   nav{position:fixed;top:auto;left:0;right:0;bottom:0;z-index:8;border-radius:0;border:0;border-top:1px solid var(--line);padding:6px 6px calc(6px + env(safe-area-inset-bottom));background:var(--surface)}
   nav button{flex-direction:column;gap:3px;font-size:12px;min-height:52px}nav button svg{width:20px;height:20px}
-  .grid{grid-template-columns:1fr}.best{gap:10px;padding:12px}.best .pct{font-size:22px}
+  .grid{grid-template-columns:1fr!important}.best{gap:10px;padding:12px}.best .pct{font-size:22px}
   #slip{bottom:76px}.hero{padding:16px}.hb{grid-template-columns:110px 1fr 90px}
 }
 </style>
@@ -191,11 +192,11 @@ footer{font-size:13px}
 <script src="config.js"></script>
 <script>
 let DATA=/*__DATA__*/null;  // filled in by the engine (single-file mode) or fetched from EDGE_DATA_URL (hosted mode)
-const TABS=[["board","Best Bets"],["nfl","NFL"],["nba","NBA"],["soccer","Soccer"],["cfb","College Football"],["parlays","Parlays"],["trending","Trending"],["leaders","Leaderboards"],["copy","Copy Trading"],["record","Track Record"],["model","How It Works"]];
-const GROUPS=[["picks","Picks","board",["board","nfl","nba","soccer","cfb"]],["parlays","Parlays","parlays",["parlays"]],["markets","Markets","trending",["trending","leaders","copy"]],["results","Results","record",["record","model"]]];
+const TABS=[["board","Best Bets"],["odds","Best Odds"],["nfl","NFL"],["nba","NBA"],["soccer","Soccer"],["cfb","College Football"],["parlays","Parlays"],["trending","Trending"],["leaders","Leaderboards"],["copy","Copy Trading"],["record","Track Record"],["model","How It Works"]];
+const GROUPS=[["picks","Picks","board",["board","odds","nfl","nba","soccer","cfb"]],["parlays","Parlays","parlays",["parlays"]],["markets","Markets","trending",["trending","leaders","copy"]],["results","Results","record",["record","model"]]];
 const TIERS=["Very likely","High","Average","Below average"], TCOL={"Very likely":"--t1","High":"--t2","Average":"--t3","Below average":"--t4"};
 const MK={ml:"Moneyline",spread:"Spread",total:"Total"}, SP={nfl:"NFL",nba:"NBA",cfb:"College Football",soccer:"Soccer",all:"All sports"};
-const S={q:"",open:new Set(),help:false,lastTab:"",lb:"WEEK",tab:"board",day:"all",tier:"all",mkt:"all",comp:"all",slate:0,stake:10,slip:[],slipStake:10};
+const S={osp:"all",q:"",open:new Set(),help:false,lastTab:"",lb:"WEEK",tab:"board",day:"all",tier:"all",mkt:"all",comp:"all",slate:0,stake:10,slip:[],slipStake:10};
 const TOPC=/UEFA|FIFA|English Premier|^LALIGA$|^Serie A$|^Bundesliga$|^Ligue 1$|^MLS$|International Friendly|Nations League|Copa America|Libertadores|Copa del Rey|FA Cup|Liga MX|Eredivisie|Liga Portugal/;
 const $=s=>document.querySelector(s), h=(s)=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const pct=(p,d=0)=>p==null?"n/a":(p*100).toFixed(d)+"%";
@@ -215,6 +216,7 @@ parlays:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width
 trending:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c1 4 5 5 5 10a5 5 0 01-10 0c0-2 1-3 2-4 0 2 1 3 2 3 0-3-1-5 1-9z"/></svg>',
 leaders:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4h8v5a4 4 0 01-8 0zM8 6H4v1a3 3 0 004 3M16 6h4v1a3 3 0 01-4 3M12 13v4M8 20h8M10 17h4v3h-4z"/></svg>',
 copy:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2"/></svg>',
+odds:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M4 12h16M4 17h7"/><path d="M17 15l3 3-3 3"/></svg>',
 record:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5M4 19h16M8 15l4-5 3 3 4-6"/></svg>',
 model:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="6" cy="6" r="2.200"/><circle cx="18" cy="6" r="2.200"/><circle cx="12" cy="18" r="2.200"/><circle cx="12" cy="11" r="1.600"/><path d="M7.600 7.500l3.200 2.500M16.400 7.500l-3.200 2.500M12 12.600v3.200"/></svg>'};
 const hue=str=>{let x=7;for(const c of str)x=(x*31+c.charCodeAt(0))%360;return x};
@@ -251,6 +253,60 @@ function mkRow(g){
     ${m.kalshi?`<div class="mkl"><span>${ext(kUrl(m.kalshi.series),"Kalshi")}</span><span>${side(m.kalshi)}</span></div>`:""}
     ${diff!=null&&Math.abs(diff)>=0.07?`<div class="pm">Model is ${Math.abs(diff*100).toFixed(0)} pts ${diff>0?"higher":"lower"} than these markets on ${h(ml.label)}.</div>`:""}
     ${(m.smart||[]).slice(0,3).map(x=>`<div class="pm">${x.n} top trader${x.n>1?"s":""} hold <b>${h(x.out)}</b> on ${h(x.title)} (${usd(x.val)})</div>`).join("")}</div>`;
+}
+// ---- Best Odds: the same outcome priced at every place we have a price for
+const p2am=p=>p>0&&p<1?toAm(1/p):null;
+function venues(g,mkt,side){
+  const v={}, o=g.odds||{}, dk={ml:{home:o.ml_h,away:o.ml_a,draw:o.ml_d},spread:{home:o.sp_h,away:o.sp_a},total:{over:o.tot_o,under:o.tot_u}}[mkt][side];
+  if(dk!=null) v[g.book||"Sportsbook"]=dk;
+  const ob=((g.ob||{})[mkt]||{})[side]||{}; for(const k in ob) if(ob[k]!=null&&!(k in v)) v[k]=ob[k];
+  if(mkt==="ml"){ for(const [nm,key] of [["Kalshi","kalshi"],["Polymarket","poly"]]){const a=(((g.mk||{})[key]||{}).ask||{})[side], am_=a!=null?p2am(a):null; if(am_!=null) v[nm]=am_} }
+  return v;
+}
+function sideProb(g,mkt,side){
+  const pk=g.picks.find(p=>p.mkt===mkt); if(!pk) return null;
+  if(pk.sel===side) return pk.p;
+  if(mkt!=="ml"||g.sp!=="soccer") return 1-pk.p;
+  const pr={home:g.proj.p_h,draw:g.proj.p_d,away:g.proj.p_a}, rest=Object.keys(pr).filter(k=>k!==pk.sel).reduce((a,k)=>a+pr[k],0);
+  return rest>0?(1-pk.p)*pr[side]/rest:null;
+}
+function oddsRows(g){
+  const o=g.odds||{}, rows=[], add=(mkt,side,label)=>{const v=venues(g,mkt,side), ks=Object.keys(v); if(!ks.length) return;
+    const best=ks.reduce((a,k)=>dec(v[k])>dec(v[a])?k:a,ks[0]), worst=ks.reduce((a,k)=>dec(v[k])<dec(v[a])?k:a,ks[0]), p=sideProb(g,mkt,side);
+    rows.push({g,mkt,side,label,v,n:ks.length,best,gap:(dec(v[best])-dec(v[worst]))*100,p,edge:p!=null?p-1/dec(v[best]):null})};
+  add("ml","away",g.away.a+" to win"); if(g.sp==="soccer") add("ml","draw","Draw"); add("ml","home",g.home.a+" to win");
+  if(o.sp!=null){add("spread","away",`${g.away.a} ${(-o.sp>0?"+":"")+(-o.sp)}`); add("spread","home",`${g.home.a} ${(o.sp>0?"+":"")+o.sp}`)}
+  if(o.tot!=null){add("total","over","Over "+o.tot); add("total","under","Under "+o.tot)}
+  return rows;
+}
+function bestOdds(){
+  const q=S.q.trim().toLowerCase();
+  const all=DATA.games.filter(g=>(S.osp==="all"||g.sp===S.osp)), days=[...new Set(all.map(g=>dayKey(g.date)))];
+  if(S.day!=="all"&&!days.includes(S.day)) S.day="all";
+  const gs=all.filter(g=>(S.day==="all"||dayKey(g.date)===S.day)&&(!q||(g.home.n+" "+g.away.n+" "+g.home.a+" "+g.away.a+" "+g.league).toLowerCase().includes(q)));
+  const per=gs.map(g=>({g,rows:oddsRows(g)})).map(x=>({...x,multi:x.rows.filter(r=>r.n>1)})).filter(x=>x.multi.length);
+  const flat=per.flatMap(x=>x.multi), ipGap=r=>{const ks=Object.keys(r.v),w=ks.reduce((a,k)=>dec(r.v[k])<dec(r.v[a])?k:a,ks[0]);return 1/dec(r.v[w])-1/dec(r.v[r.best])}, gaps=flat.filter(r=>1/dec(r.v[r.best])>=0.2).sort((a,b)=>ipGap(b)-ipGap(a)).slice(0,8), vals=flat.filter(r=>r.edge!=null&&r.edge>0&&r.p>=0.4).sort((a,b)=>b.edge-a.edge).slice(0,8);
+  const bm=DATA.books_meta||{}, c=(v,l)=>`<button class="chip ${S.osp===v?"on":""}" data-set="osp" data-v="${v}">${l}</button>`;
+  const names=new Set(); flat.forEach(r=>Object.keys(r.v).forEach(k=>names.add(k)));
+  const line=r=>`<tr><td>${h(r.label)}<br><span class="pm">${h(r.g.away.a)} at ${h(r.g.home.a)} &middot; ${SP[r.g.sp]} &middot; ${tm(r.g.date)}</span></td><td><b>${h(r.best)}</b></td><td class="num"><b>${am(r.v[r.best])}</b></td><td class="num">$${(100*dec(r.v[r.best])-100).toFixed(0)}</td><td class="num">+$${r.gap.toFixed(0)}</td><td class="num">${r.p!=null?pct(r.p):"n/a"}</td><td class="num">${r.edge!=null?(r.edge>=0?"+":"")+(r.edge*100).toFixed(1):"n/a"}</td></tr>`;
+  const head=`<tr><th>Bet</th><th>Best place</th><th class="num">Best odds</th><th class="num">Profit on $100</th><th class="num">Extra vs worst</th><th class="num">Our chance</th><th class="num">Edge at best</th></tr>`;
+  const card=x=>{const cols=[...new Set(x.multi.flatMap(r=>Object.keys(r.v)))];
+    return `<div class="card game" style="--sp:var(--${x.g.sp})"><div class="match"><div class="tm" style="margin:0">${av(x.g.away)}<span>${h(x.g.away.n)}</span><span class="pm">at</span>${av(x.g.home)}<span>${h(x.g.home.n)}</span></div><div style="text-align:right"><span class="lgtag"><i></i>${h(x.g.league)}</span><div class="meta">${tm(x.g.date)}</div></div></div>
+     <div style="overflow:auto;margin-top:8px"><table><tr><th>Bet</th>${cols.map(k=>`<th class="num">${h(k)}</th>`).join("")}<th class="num">Our chance</th><th class="num">Edge at best</th></tr>
+     ${x.multi.map(r=>`<tr><td>${h(r.label)} <span class="pm">${MK[r.mkt]}</span></td>${cols.map(k=>r.v[k]==null?`<td class="num pm">-</td>`:`<td class="num ${k===r.best?"bestcell":""}">${am(r.v[k])}${k===r.best?'<br><span class="bt">Best</span>':""}</td>`).join("")}<td class="num">${r.p!=null?pct(r.p):"n/a"}</td><td class="num">${r.edge!=null?(r.edge>=0?"+":"")+(r.edge*100).toFixed(1):"n/a"}</td></tr>`).join("")}</table></div></div>`};
+  return `<details class="help" data-help="1" ${S.help?"open":""}><summary>How to read this page</summary><dl>
+    <dt>What it does</dt><dd>Lines up the same bet at every place we have a price for, and marks the one that pays the most.</dd>
+    <dt>Best odds</dt><dd>The highest payout for that bet. A bigger plus number, or a smaller minus number, is better for you.</dd>
+    <dt>Extra vs worst</dt><dd>How much more a $100 bet would win at the best place than at the worst one.</dd>
+    <dt>Edge at best</dt><dd>Our estimated chance minus the chance implied by the best price, in percentage points. Above zero means the price looks favorable by our estimate.</dd>
+    <dt>Kalshi and Polymarket</dt><dd>Their prices are converted to odds from the current cost to buy, before trading fees, so the real payout is a little lower. Their rules and availability differ from sportsbooks, and on long shots there may be little money available at the shown price.</dd></dl></details>
+  <div class="days">${c("all","All sports")}${["nfl","nba","soccer","cfb"].map(k=>c(k,SP[k])).join("")}</div>
+  <div class="days" style="margin-top:8px">${`<button class="chip ${S.day==="all"?"on":""}" data-set="day" data-v="all">All days</button>`}${days.map(d=>`<button class="chip ${S.day===d?"on":""}" data-set="day" data-v="${d}">${dayLabel(d)}</button>`).join("")}</div>
+  <div class="tools"><input type="search" id="q" placeholder="Search a team" value="${h(S.q)}" aria-label="Search a team"></div>
+  <div class="warnbox">Comparing <b>${[...names].map(h).join(", ")||"no sources"}</b> across ${per.length} games. ${bm.enabled?(bm.asof?`Extra sportsbook prices as of ${tm(bm.asof)}.`:`Extra sportsbook prices could not be loaded${bm.error?" ("+h(bm.error)+")":""}.`):"Only one sportsbook is in the current data. More books (FanDuel, BetMGM, Caesars and others) can be added with a licensed odds feed."} Prices move, so check the book before betting.</div>
+  ${flat.length?`<h2>Biggest price differences right now</h2><div class="note" style="margin:-6px 0 10px">Bets priced at a 20% chance or better, where the places disagree most. Long shots are left out because small price gaps look huge on them.</div><div class="card" style="overflow:auto"><table>${head}${gaps.map(line).join("")}</table></div>
+  <h2>Best value at the best price</h2><div class="card" style="overflow:auto"><table>${head}${vals.map(line).join("")||'<tr><td colspan="7" class="empty">Nothing above zero edge with these filters.</td></tr>'}</table></div>
+  <h2>Every game, side by side</h2><div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(480px,1fr))">${per.map(card).join("")}</div>`:`<div class="empty">No games have prices from two or more places with these filters.</div>`}`;
 }
 function trending(){
   const M=MK_(), kind={moneyline:"Winner",spreads:"Spread",totals:"Total"};
@@ -439,7 +495,7 @@ function render(){
   const m=$("#main"), changed=S.lastTab!==S.tab, hadFocus=document.activeElement&&document.activeElement.id==="q";
   if(changed){m.style.animation="none"; void m.offsetWidth; m.style.animation=""; document.body.classList.remove("noanim"); setTimeout(()=>document.body.classList.add("noanim"),1300)}
   S.lastTab=S.tab;
-  m.innerHTML=(DATA.notices||[]).map(n=>`<div class="warnbox"><b>Heads up.</b> ${h(n)}</div>`).join("")+(S.tab==="board"?board():S.tab==="parlays"?parlays():S.tab==="trending"?trending():S.tab==="leaders"?leaders():S.tab==="copy"?copyTab():S.tab==="record"?record():S.tab==="model"?model():sportTab(S.tab))+
+  m.innerHTML=(DATA.notices||[]).map(n=>`<div class="warnbox"><b>Heads up.</b> ${h(n)}</div>`).join("")+(S.tab==="board"?board():S.tab==="odds"?bestOdds():S.tab==="parlays"?parlays():S.tab==="trending"?trending():S.tab==="leaders"?leaders():S.tab==="copy"?copyTab():S.tab==="record"?record():S.tab==="model"?model():sportTab(S.tab))+
    `<footer><b>EdgeEngine</b> &middot; Probabilities are estimates from a statistical model and sportsbook prices. No pick is guaranteed, and past results do not ensure future ones. For entertainment and analysis; bet only what you can afford to lose. If gambling is causing problems, call 1-800-GAMBLER (US).</footer>`;
   if(hadFocus){const q=$("#q"); if(q){q.focus();q.setSelectionRange(q.value.length,q.value.length)}}
   slip();
