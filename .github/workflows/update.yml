@@ -1,0 +1,53 @@
+name: update-picks
+
+# Runs the engine on a timer and publishes the results to the "data" branch.
+# The website reads data.json from that branch, so no Netlify deploy is needed per update.
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"   # every 15 minutes (GitHub may start runs late when busy)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-picks
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      REMOTE: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch previous data (pick ledger and track record)
+        run: |
+          if git clone --quiet --depth 1 --branch data "$REMOTE" data 2>/dev/null; then
+            echo "Loaded existing data branch"
+          else
+            echo "First run: starting from seed state"
+            mkdir -p data && cp seed_state.b64 data/state.b64
+          fi
+          rm -rf data/.git
+
+      # Past results are kept in the Actions cache so each run only downloads recent days.
+      # If the cache is ever lost, the engine downloads the full history again by itself.
+      - uses: actions/cache@v4
+        with:
+          path: history
+          key: history-${{ github.run_id }}
+          restore-keys: history-
+
+      - name: Run engine
+        run: python3 engine.py run --state data/state.b64 --data data/data.json --cache history
+
+      - name: Publish data branch
+        run: |
+          cd data
+          git init --quiet --initial-branch data
+          git add -A
+          git -c user.name="edgeengine-bot" -c user.email="edgeengine-bot@users.noreply.github.com" commit --quiet -m "Data update $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push --quiet --force "$REMOTE" data
