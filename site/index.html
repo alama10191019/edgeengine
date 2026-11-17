@@ -196,7 +196,7 @@ const TABS=[["board","Best Bets"],["odds","Best Odds"],["nfl","NFL"],["nba","NBA
 const GROUPS=[["picks","Picks","board",["board","odds","nfl","nba","soccer","cfb"]],["parlays","Parlays","parlays",["parlays"]],["markets","Markets","trending",["trending","leaders","copy"]],["results","Results","record",["record","model"]]];
 const TIERS=["Very likely","High","Average","Below average"], TCOL={"Very likely":"--t1","High":"--t2","Average":"--t3","Below average":"--t4"};
 const MK={ml:"Moneyline",spread:"Spread",total:"Total"}, SP={nfl:"NFL",nba:"NBA",cfb:"College Football",soccer:"Soccer",all:"All sports"};
-const S={osp:"all",q:"",open:new Set(),help:false,lastTab:"",lb:"WEEK",tab:"board",day:"all",tier:"all",mkt:"all",comp:"all",slate:0,stake:10,slip:[],slipStake:10};
+const S={psp:"all",osp:"all",q:"",open:new Set(),help:false,lastTab:"",lb:"WEEK",tab:"board",day:"all",tier:"all",mkt:"all",comp:"all",slate:0,stake:10,slip:[],slipStake:10};
 const TOPC=/UEFA|FIFA|English Premier|^LALIGA$|^Serie A$|^Bundesliga$|^Ligue 1$|^MLS$|International Friendly|Nations League|Copa America|Libertadores|Copa del Rey|FA Cup|Liga MX|Eredivisie|Liga Portugal/;
 const $=s=>document.querySelector(s), h=(s)=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const pct=(p,d=0)=>p==null?"n/a":(p*100).toFixed(d)+"%";
@@ -361,6 +361,7 @@ function gameCard(g){
     <details class="more" data-gid="${g.id}" ${S.open.has(g.id)?"open":""}><summary>More for this game${extras?` (${rest.length} more pick${rest.length===1?"":"s"}${g.sgp&&g.sgp.length?", parlays":""}${g.mk&&(g.mk.poly||g.mk.kalshi)?", markets":""})`:""}</summary>
       <div class="proj">Model: <b>${fav} by ${Math.abs(pr.margin).toFixed(1)}</b>, total <b>${pr.total.toFixed(1)}</b> &middot; win chance ${g.home.a} ${pct(pr.p_h)}${pr.p_d?`, draw ${pct(pr.p_d)}`:""}, ${g.away.a} ${pct(pr.p_a)}</div>
       ${rest.map(p=>pickRow(p)).join("")}
+      ${gameProps(g).length?`<div class="lab" style="margin:10px 0 0">Player picks</div>${gameProps(g).slice(0,4).map(propRow).join("")}`:""}
       ${mkRow(g)}
       ${sgpRows(g)}
       ${g.trends.length?`<div class="lab" style="margin:10px 0 2px">Trends</div><ul style="margin:4px 0 0;padding-left:18px;color:var(--text2);font-size:14px">${g.trends.map(t=>`<li>${h(t)}</li>`).join("")}</ul>`:""}
@@ -413,6 +414,32 @@ function board(){
    <div class="card"><h3>Most likely to hit</h3><div class="note">Highest hit probability among picks with a posted price. Heavy favorites pay little.</div>${top.map(p=>pickRow(p,1)).join("")||'<div class="empty">None</div>'}</div>
    <div class="card"><h3>Best value</h3><div class="note">Where the model's probability most exceeds the sportsbook price.</div>${val.map(p=>pickRow(p,1)).join("")||'<div class="empty">No positive-value picks with these filters.</div>'}</div></div>`;
 }
+const propRow=p=>{const on=S.slip.some(x=>x.id===p.id);
+  return `<div class="pick" data-tip="Season average ${p.avg} over ${p.n} games | Projection ${p.proj} | Last games: ${p.last.join(', ')}${p.est?' | No price posted yet; payouts use a typical -115':''}">
+    <div><div class="pl">${h(p.player)} <span class="pm">${h(p.team)}</span></div><div>${p.sel==="over"?"Over":"Under"} <b>${p.line}</b> ${h(p.stat)}</div>
+      <div class="pm">avg ${p.avg} &middot; last ${p.last.length}: ${p.last.join(", ")}</div>
+      <div style="margin-top:4px">${tierChip(p.tier)}</div></div>
+    <div class="pct">${pct(p.p)}</div><div class="odds">${am(p.odds)}${p.est?'<br><span class="pm">est.</span>':""}</div>
+    <button class="add ${on?"on":""}" data-add="${p.id}" title="Add to parlay slip" aria-label="Add ${h(p.label)} to parlay slip">${on?"&#10003;":"+"}</button></div>`};
+const gameProps=g=>(DATA.props||[]).filter(p=>p.eid===g.id);
+function sportParlays(sp){
+  const V=(DATA.sport_parlays||{})[sp]; if(!V) return `<div class="empty">Parlays for this sport are not available yet. They appear after the next update.</div>`;
+  const props=(DATA.props||[]).filter(p=>p.sp===sp), hasProps=sp==="nba"||sp==="nfl";
+  const grid=a=>`<div class="grid">${a.map(p=>parlayCard(p,S.stake)).join("")}</div>`;
+  let o=`<h2>${SP[sp]} game parlays</h2>`+(V.game.length?grid(V.game):`<div class="empty">Not enough priced ${SP[sp]} games right now.</div>`);
+  o+=`<h2>${SP[sp]} player parlays</h2>`;
+  if(!hasProps) o+=`<div class="warnbox">Player picks are not available for ${SP[sp]}. The data source lists player lines for the NBA and NFL only.</div>`;
+  else if(!V.players.length) o+=`<div class="warnbox">No player lines are posted for ${SP[sp]} right now. NBA lines usually appear on game day; NFL lines appear a few days before kickoff.</div>`;
+  else o+=`<div class="note" style="margin:-6px 0 10px">Each leg is a different player. Player picks are new and have no track record yet, so treat these as higher risk than game parlays.${V.players.some(p=>p.legs.some(l=>l.odds===-115))?" Where the book has not posted a price yet, payouts assume a typical -115 per leg.":""}</div>`+grid(V.players);
+  if(V.combos.length) o+=`<h2>Game and player combos</h2><div class="note" style="margin:-6px 0 10px">Legs come from different games, so the outcomes are not tied to each other.</div>`+grid(V.combos);
+  if(props.length) o+=`<h2>Top ${SP[sp]} player picks</h2><div class="grid">${Object.entries(props.reduce((a,p)=>((a[p.game]=a[p.game]||[]).push(p),a),{})).map(([gm,ps])=>`<div class="card"><h3>${h(gm)}</h3><div class="pm">${tm(ps[0].d)}</div>${ps.slice(0,6).map(propRow).join("")}</div>`).join("")}</div>`;
+  if(V.sgp.length) o+=`<h2>Most likely same-game parlays</h2><div class="card" style="overflow:auto"><table><tr><th>Game</th><th>Parlay</th><th class="num">Chance both hit</th><th class="num">Approx. odds</th><th class="num">Returns on $${S.stake}</th></tr>
+    ${V.sgp.map(c=>`<tr><td>${h(c.game)}<br><span class="pm">${tm(c.d)}</span></td><td>${h(c.legs[0])} + ${h(c.legs[1])}</td><td class="num">${pct(c.p,1)}</td><td class="num">${am(c.amer)}</td><td class="num">$${(S.stake*c.dec).toFixed(2)}</td></tr>`).join("")}</table></div>`;
+  if(V.rr.length){const r0=V.rr[0]; o+=`<h2>Round robin: top 4 ${SP[sp]} picks in every combination</h2><div class="note">Legs: ${r0.legs.map(l=>`${h(l.label)} (${pct(l.p)}, ${am(l.odds)})`).join(" &middot; ")}</div>
+    <div class="card" style="margin-top:8px;overflow:auto"><table><tr><th>Format</th><th class="num">Combos</th><th class="num">Total cost</th><th class="num">Average return</th><th class="num">Max return</th><th class="num">Chance of profit</th></tr>
+    ${V.rr.map(r=>`<tr><td>By ${r.size}s ($${r.stake} each)</td><td class="num">${r.combos}</td><td class="num">$${r.cost}</td><td class="num">$${r.exp_return.toFixed(2)}</td><td class="num">$${r.max_return.toFixed(2)}</td><td class="num">${pct(r.p_profit,1)}</td></tr>`).join("")}</table></div>`}
+  return o;
+}
 function parlayCard(p,stake){
   const pay=stake*p.dec;
   return `<div class="card pcard"><div class="gh"><h3>${h(p.name)} <span class="meta">${p.n} legs</span></h3>${p.st&&p.st!=="pending"?`<span class="res ${p.st}">${p.st==="win"?"&#10003; Hit":"&#10007; Missed"}</span>`:tierChip(p.tier)}</div>
@@ -421,9 +448,16 @@ function parlayCard(p,stake){
    <div><b>$${pay.toFixed(2)}</b><span>returns on $${stake}</span></div><div><b>${p.ev>=0?"+":""}${(p.ev*100).toFixed(1)}%</b><span>expected value</span></div></div>
    <div class="bar"><i style="width:${Math.max(1,p.p*100).toFixed(1)}%"></i></div>
    <div class="pm" style="margin:4px 0 6px">Fair odds for this chance: ${am(p.fair)} &middot; chance exactly one leg misses: ${pct(p.p_miss1,1)}</div>
-   ${p.legs.map(l=>`<div class="leg"><div><b>${h(l.label)}</b> <span class="pm">${MK[l.mkt]}</span><small>${h(l.game)} &middot; ${tm(l.d)}</small></div><div style="text-align:right;white-space:nowrap">${pct(l.p)} &middot; ${am(l.odds)}${l.st&&l.st!=="pending"?` <span class="res ${l.st}">${l.st}</span>`:""}</div></div>`).join("")}</div>`;
+   ${p.legs.map(l=>`<div class="leg"><div><b>${h(l.label)}</b> <span class="pm">${MK[l.mkt]||"Player"}</span><small>${h(l.game)} &middot; ${tm(l.d)}</small></div><div style="text-align:right;white-space:nowrap">${pct(l.p)} &middot; ${am(l.odds)}${l.st&&l.st!=="pending"?` <span class="res ${l.st}">${l.st}</span>`:""}</div></div>`).join("")}</div>`;
 }
 function parlays(){
+  const sc=(v,l)=>`<button class="chip ${S.psp===v?"on":""}" data-set="psp" data-v="${v}">${l}</button>`;
+  const top=`<div class="days">${sc("all","By day")}${["nfl","nba","soccer","cfb"].map(k=>sc(k,SP[k])).join("")}</div>`;
+  if(S.psp!=="all") return top+`<div class="row" style="margin-top:10px"><span class="lab">Stake $</span><select data-sel="stake">${[5,10,20,25,50,100].map(v=>`<option ${v===S.stake?"selected":""}>${v}</option>`).join("")}</select></div>
+   <div class="warnbox">Combined chance is each leg's probability multiplied together. Every added leg lowers the chance of hitting, and a negative expected value means the payout does not make up for the risk at these prices.</div>`+sportParlays(S.psp);
+  return top+`<div style="height:10px"></div>`+parlaysByDay();
+}
+function parlaysByDay(){
   const G=DATA.parlays; if(!G.length) return `<div class="empty">Not enough priced games to build parlays right now.</div>`;
   if(S.slate>=G.length) S.slate=0; const g=G[S.slate];
   const lab=t=>t==="week"?"Next 7 days":dayLabel(t);
@@ -460,6 +494,9 @@ function record(){
   for(const s of ["nfl","nba","cfb","soccer"]){const b=DATA.backtest[s]; if(!b) continue;
     o+=`<div class="card"><h3>${SP[s]} <span class="meta">${b.all[0]} games, ${pct(b.all[1]/b.all[0],1)} overall</span></h3>${TIERS.filter(t=>b[t]).map(t=>{const [n,w,sp]=b[t];return `<div class="hb" data-tip="${t}: hit ${w} of ${n} (${pct(w/n,1)}); model predicted ${pct(sp/n,1)}"><div>${tierChip(t)}</div><div class="bar"><i style="width:${(w/n*100).toFixed(1)}%"></i><u style="left:${(sp/n*100).toFixed(1)}%"></u></div><div>${pct(w/n,1)} <span class="pm">of ${n}</span></div></div>`}).join("")}</div>`}
   o+=`</div>`;
+  const PP=DATA.prop_perf||{};
+  if(Object.keys(PP).length) o+=`<h2>Player picks record</h2><div class="card"><table><tr><th>Sport</th><th>Confidence</th><th class="num">W-L-P</th><th class="num">Hit rate</th></tr>${Object.entries(PP).flatMap(([s,v])=>Object.entries(v).map(([t,r])=>`<tr><td>${SP[s]||s}</td><td>${tierChip(t)}</td><td class="num">${r[0]}-${r[1]}${r[2]?"-"+r[2]:""}</td><td class="num">${r[0]+r[1]?pct(r[0]/(r[0]+r[1]),1):"n/a"}</td></tr>`)).join("")}</table></div>`;
+  else if((DATA.props||[]).length) o+=`<h2>Player picks record</h2><div class="warnbox">Player picks started recently and none have been graded yet. Results appear here after the games finish.</div>`;
   const pp=Object.entries(DATA.parlay_perf);
   if(pp.length) o+=`<h2>Parlay results by type</h2><div class="card"><table><tr><th>Parlay</th><th class="num">Hit</th><th class="num">Issued</th><th class="num">Units</th></tr>${pp.map(([k,r])=>`<tr><td>${h(k)}</td><td class="num">${r[1]}</td><td class="num">${r[0]}</td><td class="num">${r[2]>=0?"+":""}${r[2].toFixed(2)}</td></tr>`).join("")}</table></div>`;
   if(DATA.recent.length) o+=`<h2>Recently graded picks</h2><div class="card" style="overflow:auto"><table><tr><th>Date</th><th>Sport</th><th>Pick</th><th>Game</th><th>Final</th><th class="num">Chance</th><th class="num">Odds</th><th>Result</th></tr>
@@ -505,7 +542,7 @@ document.addEventListener("click",e=>{ if(!DATA) return;
   if(t.dataset.reset){S.q="";S.tier="all";S.mkt="all";S.day="all";S.comp="all";render();return}
   if(t.dataset.tab){S.tab=t.dataset.tab;window.scrollTo(0,0)}
   else if(t.dataset.set){const k=t.dataset.set;S[k]=k==="slate"?+t.dataset.v:t.dataset.v}
-  else if(t.dataset.add){const id=t.dataset.add,i=S.slip.findIndex(x=>x.id===id); if(i>=0)S.slip.splice(i,1); else{const p=allPicks().find(x=>x.id===id); if(p&&p.odds!=null)S.slip.push(p)}}
+  else if(t.dataset.add){const id=t.dataset.add,i=S.slip.findIndex(x=>x.id===id); if(i>=0)S.slip.splice(i,1); else{const p=allPicks().find(x=>x.id===id)||(DATA.props||[]).find(x=>x.id===id); if(p&&p.odds!=null)S.slip.push(p)}}
   else if(t.dataset.clear){S.slip=[]}
   render();
 });
@@ -528,7 +565,7 @@ async function load(first){
     if(!r.ok) throw new Error("HTTP "+r.status);
     const d=await r.json();
     if(DATA&&d.generated===DATA.generated) return;
-    DATA=d; const ids=new Set(allPicks().map(p=>p.id)); S.slip=S.slip.filter(p=>ids.has(p.id));
+    DATA=d; const ids=new Set(allPicks().map(p=>p.id).concat((DATA.props||[]).map(p=>p.id))); S.slip=S.slip.filter(p=>ids.has(p.id));
     const y=scrollY; chrome(); render(); scrollTo(0,y);
   }catch(e){
     if(first) $("#main").innerHTML=`<div class="warnbox">Picks could not be loaded yet (${h(e.message)}). If the site was just set up, the first data update may still be running; this page retries automatically.</div>`;
