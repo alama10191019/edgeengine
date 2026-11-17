@@ -90,8 +90,9 @@ tr:hover td{background:color-mix(in srgb,var(--surface2) 60%,transparent)}
 .pcard .big{display:flex;gap:18px;flex-wrap:wrap;margin:10px 0;padding:10px 12px;border-radius:10px;background:var(--surface2);border:1px dashed var(--line)}.pcard .big div{min-width:70px}.pcard .big b{display:block;font-size:21px;font-weight:900;font-variant-numeric:tabular-nums}
 .pcard .big span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
 .sg{display:grid;grid-template-columns:1fr 52px 58px 64px;gap:8px;align-items:center;padding:6px 0;border-top:1px dashed var(--line);font-size:13px}.sg .pct{font-size:14px}
-.mkrow{margin-top:8px;padding:6px 10px;border-radius:10px;border:1px dashed var(--line)}.mkl{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:2px 0;font-variant-numeric:tabular-nums}
+.mkrow{margin-top:8px;padding:6px 10px;border-radius:10px;border:1px dashed var(--line)}.mkl{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:13px;padding:5px 0;font-variant-numeric:tabular-nums}
 .bestcell{font-weight:800;color:var(--goodtx);background:color-mix(in srgb,var(--brand) 14%,transparent)!important}.bt{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.trade{display:inline-flex;align-items:center;gap:5px;min-height:34px;padding:5px 12px;border-radius:9px;background:var(--brand);color:var(--brandink);font-weight:700;font-size:13px;text-decoration:none;white-space:nowrap}.trade:hover{filter:brightness(1.08)}
 .xl{color:inherit;text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--brand) 60%,transparent);text-underline-offset:2px}.xl:hover{color:var(--goodtx)}
 .sgp{margin-top:8px;padding:2px 10px 6px;border-radius:10px;background:color-mix(in srgb,var(--surface2) 70%,transparent)}
 .leg{display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-top:1px solid var(--line);font-size:13px}
@@ -239,6 +240,7 @@ const MK_=()=>DATA.markets||{errors:["Not loaded yet"],lb:{},traders:[],shared:[
 const usd=v=>{const a=Math.abs(v),s=v<0?"-":"";return s+"$"+(a>=1e6?(a/1e6).toFixed(2)+"M":a>=1e3?(a/1e3).toFixed(a>=1e4?0:1)+"K":a.toFixed(0))};
 const num=v=>v>=1e6?(v/1e6).toFixed(2)+"M":v>=1e3?(v/1e3).toFixed(v>=1e4?0:1)+"K":String(v);
 const pmUrl=slug=>"https://polymarket.com/event/"+encodeURIComponent(slug), pmUser=id=>"https://polymarket.com/profile/"+encodeURIComponent(id), kUrl=s=>"https://kalshi.com/markets/"+encodeURIComponent(String(s).toLowerCase());
+const trade=(url,where)=>`<a class="trade" href="${url}" target="_blank" rel="noopener noreferrer" title="Opens this market on ${where} in a new tab. You choose the amount and confirm there.">Trade this <span aria-hidden="true">&#8599;</span></a>`;
 const ext=(url,txt)=>`<a class="xl" href="${url}" target="_blank" rel="noopener noreferrer">${txt}</a>`;
 const mkNote=`<div class="warnbox">Data from Polymarket's and Kalshi's public feeds, refreshed with each update. Shown for information only: nothing here places a trade. Top traders' past profit does not predict future results, and a position you see may be a hedge or already partly closed. Prediction markets are not available everywhere; check what is permitted where you live.</div>`;
 const mkErr=()=>{const e=MK_().errors||[];return e.length?`<div class="warnbox">Some market data is unavailable right now: ${h(e.join("; "))}.</div>`:""};
@@ -249,8 +251,8 @@ function mkRow(g){
   const avg=mp?[m.poly,m.kalshi].filter(Boolean).map(o=>o[mp]).filter(v=>v!=null):[], a=avg.length?avg.reduce((x,y)=>x+y,0)/avg.length:null;
   const diff=a!=null&&ml?ml.pm-a:null;
   return `<div class="mkrow"><div class="lab">Prediction markets</div>
-    ${m.poly?`<div class="mkl"><span>${ext(pmUrl(m.poly.slug),"Polymarket")}</span><span>${side(m.poly)}</span></div>`:""}
-    ${m.kalshi?`<div class="mkl"><span>${ext(kUrl(m.kalshi.series),"Kalshi")}</span><span>${side(m.kalshi)}</span></div>`:""}
+    ${m.poly?`<div class="mkl"><span><b>Polymarket</b><br>${side(m.poly)}</span>${trade(pmUrl(m.poly.slug),"Polymarket")}</div>`:""}
+    ${m.kalshi?`<div class="mkl"><span><b>Kalshi</b><br>${side(m.kalshi)}</span>${trade(kUrl(m.kalshi.series),"Kalshi")}</div>`:""}
     ${diff!=null&&Math.abs(diff)>=0.07?`<div class="pm">Model is ${Math.abs(diff*100).toFixed(0)} pts ${diff>0?"higher":"lower"} than these markets on ${h(ml.label)}.</div>`:""}
     ${(m.smart||[]).slice(0,3).map(x=>`<div class="pm">${x.n} top trader${x.n>1?"s":""} hold <b>${h(x.out)}</b> on ${h(x.title)} (${usd(x.val)})</div>`).join("")}</div>`;
 }
@@ -288,7 +290,7 @@ function bestOdds(){
   const flat=per.flatMap(x=>x.multi), ipGap=r=>{const ks=Object.keys(r.v),w=ks.reduce((a,k)=>dec(r.v[k])<dec(r.v[a])?k:a,ks[0]);return 1/dec(r.v[w])-1/dec(r.v[r.best])}, gaps=flat.filter(r=>1/dec(r.v[r.best])>=0.2).sort((a,b)=>ipGap(b)-ipGap(a)).slice(0,8), vals=flat.filter(r=>r.edge!=null&&r.edge>0&&r.p>=0.4).sort((a,b)=>b.edge-a.edge).slice(0,8);
   const bm=DATA.books_meta||{}, c=(v,l)=>`<button class="chip ${S.osp===v?"on":""}" data-set="osp" data-v="${v}">${l}</button>`;
   const names=new Set(); flat.forEach(r=>Object.keys(r.v).forEach(k=>names.add(k)));
-  const line=r=>`<tr><td>${h(r.label)}<br><span class="pm">${h(r.g.away.a)} at ${h(r.g.home.a)} &middot; ${SP[r.g.sp]} &middot; ${tm(r.g.date)}</span></td><td><b>${h(r.best)}</b></td><td class="num"><b>${am(r.v[r.best])}</b></td><td class="num">$${(100*dec(r.v[r.best])-100).toFixed(0)}</td><td class="num">+$${r.gap.toFixed(0)}</td><td class="num">${r.p!=null?pct(r.p):"n/a"}</td><td class="num">${r.edge!=null?(r.edge>=0?"+":"")+(r.edge*100).toFixed(1):"n/a"}</td></tr>`;
+  const line=r=>`<tr><td>${h(r.label)}<br><span class="pm">${h(r.g.away.a)} at ${h(r.g.home.a)} &middot; ${SP[r.g.sp]} &middot; ${tm(r.g.date)}</span></td><td><b>${h(r.best)}</b>${r.best==="Polymarket"&&r.g.mk&&r.g.mk.poly?"<br>"+trade(pmUrl(r.g.mk.poly.slug),"Polymarket"):r.best==="Kalshi"&&r.g.mk&&r.g.mk.kalshi?"<br>"+trade(kUrl(r.g.mk.kalshi.series),"Kalshi"):""}</td><td class="num"><b>${am(r.v[r.best])}</b></td><td class="num">$${(100*dec(r.v[r.best])-100).toFixed(0)}</td><td class="num">+$${r.gap.toFixed(0)}</td><td class="num">${r.p!=null?pct(r.p):"n/a"}</td><td class="num">${r.edge!=null?(r.edge>=0?"+":"")+(r.edge*100).toFixed(1):"n/a"}</td></tr>`;
   const head=`<tr><th>Bet</th><th>Best place</th><th class="num">Best odds</th><th class="num">Profit on $100</th><th class="num">Extra vs worst</th><th class="num">Our chance</th><th class="num">Edge at best</th></tr>`;
   const card=x=>{const cols=[...new Set(x.multi.flatMap(r=>Object.keys(r.v)))];
     return `<div class="card game" style="--sp:var(--${x.g.sp})"><div class="match"><div class="tm" style="margin:0">${av(x.g.away)}<span>${h(x.g.away.n)}</span><span class="pm">at</span>${av(x.g.home)}<span>${h(x.g.home.n)}</span></div><div style="text-align:right"><span class="lgtag"><i></i>${h(x.g.league)}</span><div class="meta">${tm(x.g.date)}</div></div></div>
@@ -310,10 +312,10 @@ function bestOdds(){
 }
 function trending(){
   const M=MK_(), kind={moneyline:"Winner",spreads:"Spread",totals:"Total"};
-  return mkErr()+mkNote+`<h2>Most traded on Polymarket, last 24 hours</h2><div class="card" style="overflow:auto"><table><tr><th>#</th><th>Market</th><th>Type</th><th>Leading side</th><th class="num">Price</th><th class="num">24h volume</th><th>Starts</th></tr>
-   ${M.poly_trending.map((t,i)=>`<tr><td>${i+1}</td><td>${ext(pmUrl(t.slug),h(t.q))}</td><td>${kind[t.kind]||h(t.kind)}</td><td>${h(t.fav)}</td><td class="num">${pct(t.p)}</td><td class="num">${usd(t.v24)}</td><td>${t.start?tm(t.start):""}</td></tr>`).join("")||'<tr><td colspan="7" class="empty">No data</td></tr>'}</table></div>
-  <h2>Most traded games on Kalshi, last 24 hours</h2><div class="card" style="overflow:auto"><table><tr><th>#</th><th>Game</th><th>Sport</th><th>Favorite</th><th class="num">Price</th><th class="num">24h contracts</th><th>Date</th></tr>
-   ${M.kalshi_trending.map((t,i)=>`<tr><td>${i+1}</td><td>${ext(kUrl(t.series),h(t.title))}</td><td>${SP[t.sp]||""}</td><td>${h(t.fav)}</td><td class="num">${pct(t.p)}</td><td class="num">${num(t.v24)}</td><td>${dayLabel(t.day)}</td></tr>`).join("")||'<tr><td colspan="7" class="empty">No data</td></tr>'}</table>
+  return mkErr()+mkNote+`<h2>Most traded on Polymarket, last 24 hours</h2><div class="card" style="overflow:auto"><table><tr><th>#</th><th>Market</th><th>Type</th><th>Leading side</th><th class="num">Price</th><th class="num">24h volume</th><th>Starts</th><th></th></tr>
+   ${M.poly_trending.map((t,i)=>`<tr><td>${i+1}</td><td>${ext(pmUrl(t.slug),h(t.q))}</td><td>${kind[t.kind]||h(t.kind)}</td><td>${h(t.fav)}</td><td class="num">${pct(t.p)}</td><td class="num">${usd(t.v24)}</td><td>${t.start?tm(t.start):""}</td><td>${trade(pmUrl(t.slug),"Polymarket")}</td></tr>`).join("")||'<tr><td colspan="8" class="empty">No data</td></tr>'}</table></div>
+  <h2>Most traded games on Kalshi, last 24 hours</h2><div class="card" style="overflow:auto"><table><tr><th>#</th><th>Game</th><th>Sport</th><th>Favorite</th><th class="num">Price</th><th class="num">24h contracts</th><th>Date</th><th></th></tr>
+   ${M.kalshi_trending.map((t,i)=>`<tr><td>${i+1}</td><td>${ext(kUrl(t.series),h(t.title))}</td><td>${SP[t.sp]||""}</td><td>${h(t.fav)}</td><td class="num">${pct(t.p)}</td><td class="num">${num(t.v24)}</td><td>${dayLabel(t.day)}</td><td>${trade(kUrl(t.series),"Kalshi")}</td></tr>`).join("")||'<tr><td colspan="8" class="empty">No data</td></tr>'}</table>
    <div class="pm" style="margin-top:6px">Kalshi list covers the leagues EdgeEngine tracks. A price is the market's implied chance, for example 0.62 = 62%.</div></div>`;
 }
 function leaders(){
@@ -327,9 +329,15 @@ function leaders(){
 }
 function copyTab(){
   const M=MK_();
-  const pos=p=>`<div class="leg"><div><b>${h(p.out)}</b> <span class="pm">on</span> ${ext(pmUrl(p.slug),h(p.title))}<small>entry ${pct(p.avg,1)} &middot; now ${pct(p.cur,1)} &middot; ${p.pnl>=0?"up":"down"} ${usd(Math.abs(p.pnl))}</small></div><div style="text-align:right;white-space:nowrap"><b>${usd(p.val)}</b><small>position value</small></div></div>`;
-  return mkErr()+mkNote+`<h2>Positions shared by several top traders</h2><div class="card" style="overflow:auto"><table><tr><th>Market</th><th>Side</th><th class="num">Top traders</th><th class="num">Combined value</th><th>Who</th></tr>
-   ${M.shared.filter(x=>x.n>1).map(x=>`<tr><td>${ext(pmUrl(x.slug),h(x.title))}</td><td><b>${h(x.out)}</b></td><td class="num">${x.n}</td><td class="num">${usd(x.val)}</td><td class="pm">${h(x.who.join(", "))}</td></tr>`).join("")||'<tr><td colspan="5" class="empty">No game positions are currently shared by two or more of the top traders.</td></tr>'}</table>
+  const gap=p=>{const d=(p.cur-p.avg)*100; return Math.abs(d)<0.5?"same price as their entry":d>0?`costs ${d.toFixed(1)} pts more now than their entry`:`${(-d).toFixed(1)} pts cheaper now than their entry`};
+  const pos=p=>`<div class="leg"><div><b>${h(p.out)}</b> <span class="pm">on</span> ${ext(pmUrl(p.slug),h(p.title))}<small>they paid ${pct(p.avg,1)} &middot; price now ${pct(p.cur,1)} &middot; ${gap(p)}</small><small>their position: ${usd(p.val)}, ${p.pnl>=0?"up":"down"} ${usd(Math.abs(p.pnl))}</small></div><div style="text-align:right">${trade(pmUrl(p.slug),"Polymarket")}</div></div>`;
+  return mkErr()+mkNote+`<details class="help" data-help="1" ${S.help?"open":""}><summary>How "Trade this" works</summary><dl>
+    <dt>What it does</dt><dd>Opens that exact market on Polymarket in a new tab. Nothing is bought until you pick the side, enter an amount and confirm there.</dd>
+    <dt>Your account</dt><dd>You trade in your own Polymarket account. EdgeEngine never sees your login, wallet or balance, and cannot place a trade for you.</dd>
+    <dt>Check the price</dt><dd>Each position shows what the trader paid and the price now. If the price has moved up since they bought, you would be getting a worse deal than they did.</dd>
+    <dt>Check the side</dt><dd>Make sure you pick the same side shown here (for example "No" or a team name) before confirming.</dd></dl></details>
+  <h2>Positions shared by several top traders</h2><div class="card" style="overflow:auto"><table><tr><th>Market</th><th>Side</th><th class="num">Top traders</th><th class="num">Combined value</th><th>Who</th><th></th></tr>
+   ${M.shared.filter(x=>x.n>1).map(x=>`<tr><td>${ext(pmUrl(x.slug),h(x.title))}</td><td><b>${h(x.out)}</b></td><td class="num">${x.n}</td><td class="num">${usd(x.val)}</td><td class="pm">${h(x.who.join(", "))}</td><td>${trade(pmUrl(x.slug),"Polymarket")}</td></tr>`).join("")||'<tr><td colspan="6" class="empty">No game positions are currently shared by two or more of the top traders.</td></tr>'}</table>
    <div class="pm" style="margin-top:6px">Game markets only, among this week's top ${M.traders.length} sports traders. Traders sometimes hold both sides of a market.</div></div>
   <h2>What this week's top traders hold</h2><div class="grid">${M.traders.map(t=>{const gp=t.positions.filter(p=>p.game), op=t.positions.filter(p=>!p.game).slice(0,3);
     return `<div class="card"><div class="gh"><h3>#${t.rank} ${ext(pmUser(t.id),h(t.name))}</h3><span class="tier">${usd(t.pnl)} this week</span></div><div class="pm">${t.open} open positions &middot; ${usd(t.vol)} traded this week</div>
