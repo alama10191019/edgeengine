@@ -9,7 +9,7 @@ Commands:
   The state file holds only the ledger (picks, parlays, track record, live-learned settings);
   team ratings are rebuilt from results on every run, so a lost state never corrupts the model.
 """
-import argparse, base64, gzip, lzma, itertools, json, math, os, subprocess, sys, urllib.request
+import argparse, base64, gzip, lzma, time, itertools, json, math, os, subprocess, sys, urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -134,7 +134,8 @@ def parse_event(e, lg):
     for x in c["competitors"]:
         t = x["team"]
         out[x["homeAway"]] = {"id": t["id"], "name": t.get("displayName") or t.get("name"), "abbr": t.get("abbreviation") or (t.get("name") or "")[:3].upper(),
-                              "score": to_int(x.get("score")), "rec": next((r.get("summary") for r in x.get("records", [])), None)}
+                              "score": to_int(x.get("score")), "rec": next((r.get("summary") for r in x.get("records", [])), None),
+                              "loc": t.get("location") or "", "nick": t.get("name") or "", "short": t.get("shortDisplayName") or ""}
     if "home" not in out or "away" not in out:
         return None
     o = (c.get("odds") or [None])[0]
@@ -163,21 +164,48 @@ def _dig(d, ks):
     return d
 
 
+BAD_DATES = set()  # leagues whose feed returned implausible game dates in this run
+
+
 def fetch_days(lg, days):
     _, _, path, extra = LEAGUES[lg]
     urls = [f"{BASE}{path}/scoreboard?dates={d}{extra}" for d in days]
     with ThreadPoolExecutor(8) as ex:
         res = list(ex.map(fetch, urls))
+    # the feed sometimes answers with an empty day when busy: ask once more before believing it
+    empty = [i for i, r in enumerate(res) if not r.get("events")]
+    if empty and len(empty) <= 40:
+        time.sleep(1.5)
+        with ThreadPoolExecutor(4) as ex:
+            again = list(ex.map(fetch, [urls[i] for i in empty]))
+        for i, r in zip(empty, again):
+            if r.get("events"):
+                res[i] = r
     evs, failed = {}, 0
-    for r in res:
+    for tok, r in zip(days, res):
         failed += 1 if r.get("_failed") else 0
+        got = []
         for e in r.get("events", []):
             try:
                 p = parse_event(e, lg)
             except Exception:
                 p = None
             if p:
-                evs[p["id"]] = p
+                got.append(p)
+        # sanity check: the feed has been seen returning games stamped with a wrong year
+        try:
+            if len(tok) == 8 and tok.isdigit():
+                want = datetime.strptime(tok, "%Y%m%d")
+                bad = [p for p in got if abs((datetime.fromisoformat(p["date"][:10]) - want).days) > 3]
+            else:
+                yr = int(tok[:4]); bad = [p for p in got if int(p["date"][:4]) not in (yr, yr + 1)]
+        except Exception:
+            bad = []
+        if bad:
+            failed += 1; BAD_DATES.add(lg)
+            continue
+        for p in got:
+            evs[p["id"]] = p
     return list(evs.values()), failed
 
 
@@ -515,6 +543,235 @@ def build_parlays(pool, tag):
 
 
 # ---------------------------------------------------------------- commands
+# ---------------------------------------------------------------- prediction markets
+# Public, documented feeds only: Polymarket (leaderboard, positions, markets) and Kalshi (markets).
+# Everything here is optional: if a feed fails, picks are unaffected and the section shows as unavailable.
+POLY_DATA = "https://data-api.polymarket.com/v2/"
+POLY_GAMMA = "https://gamma-api.polymarket.com/"
+KALSHI = "https://api.elections.kalshi.com/trade-api/v2/"
+KALSHI_SERIES = {"nfl": ["KXNFLGAME"], "nba": ["KXNBAGAME"], "cfb": ["KXNCAAFGAME"],
+                 "soccer": ["KXEPLGAME", "KXLALIGAGAME", "KXSERIEAGAME", "KXBUNDESLIGAGAME", "KXLIGUE1GAME", "KXUCLGAME", "KXUELGAME", "KXUEFANLGAME", "KXMLSGAME", "KXBRASILEIROGAME", "KXLIGAMXGAME"]}
+ESPORTS = ("cs2-", "dota2-", "lol-", "val-", "codmw-", "r6-", "rl-", "sc2-", "ow-", "mlbb-", "hok-", "kog-")
+TOP_TRADERS = 12
+
+
+def fetch_json(url):
+    for _ in range(2):
+        try:
+            req = urllib.request.Request(url, headers={"Accept-Encoding": "gzip", "User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=25) as r:
+                raw = r.read()
+                if raw[:2] == b"\x1f\x8b":
+                    raw = gzip.decompress(raw)
+                return json.loads(raw)
+        except Exception:
+            try:
+                out = subprocess.run(["curl", "-sS", "--compressed", "-m", "30", "-A", "Mozilla/5.0", url], capture_output=True, timeout=45).stdout
+                d = json.loads(out)
+                if not (isinstance(d, dict) and d.get("error")):
+                    return d
+            except Exception:
+                pass
+    return None
+
+
+def nrm(x):
+    x = (x or "").lower().replace("st.", "state").replace("&", "and")
+    return " ".join("".join(c if c.isalnum() or c == " " else " " for c in x).split())
+
+
+def team_keys(t):
+    ks = {nrm(t.get("n")), nrm(t.get("loc")), nrm(t.get("nick")), nrm(t.get("short"))}
+    if t.get("loc") and t.get("nick"):
+        ks.add(nrm(t["loc"] + " " + t["nick"][0]))  # Kalshi style: "Los Angeles C"
+    ks.discard("")
+    return ks
+
+
+def fnum(x, d=0.0):
+    try:
+        return float(x)
+    except Exception:
+        return d
+
+
+def poly_markets():
+    """Most-traded sports markets on Polymarket in the last 24 hours (moneyline, spread, total)."""
+    out = []
+    for kind, pages in (("moneyline", 3), ("spreads", 1), ("totals", 1)):
+        for pg in range(pages):
+            ms = fetch_json(f"{POLY_GAMMA}markets?closed=false&sports_market_types={kind}&limit=100&offset={pg * 100}&order=volume24hr&ascending=false")
+            if not isinstance(ms, list):
+                break
+            for m in ms:
+                try:
+                    slug = ((m.get("events") or [{}])[0].get("slug")) or m.get("slug") or ""
+                    out.append({"q": m.get("question") or "", "kind": m.get("sportsMarketType") or kind, "slug": slug, "start": (m.get("gameStartTime") or "").replace(" ", "T").replace("+00", "Z"),
+                                "outs": json.loads(m.get("outcomes") or "[]"), "px": [fnum(x) for x in json.loads(m.get("outcomePrices") or "[]")], "v24": fnum(m.get("volume24hr"))})
+                except Exception:
+                    continue
+            if len(ms) < 100:
+                break
+    return out
+
+
+def kalshi_events(series):
+    evs, cursor = [], ""
+    for _ in range(4):
+        d = fetch_json(f"{KALSHI}events?limit=100&status=open&with_nested_markets=true&series_ticker={series}" + (f"&cursor={cursor}" if cursor else ""))
+        if not isinstance(d, dict):
+            break
+        evs += d.get("events") or []
+        cursor = d.get("cursor") or ""
+        if not cursor:
+            break
+    out = []
+    months = {m: i + 1 for i, m in enumerate("JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC".split())}
+    for e in evs:
+        try:
+            tok = e["event_ticker"].split("-")[1]
+            day = f"20{tok[:2]}-{months[tok[2:5]]:02d}-{tok[5:7]}"
+            mk = []
+            for m in e.get("markets") or []:
+                bid, ask, last = fnum(m.get("yes_bid_dollars")), fnum(m.get("yes_ask_dollars")), fnum(m.get("last_price_dollars"))
+                px = (bid + ask) / 2 if bid > 0 and ask > 0 and ask - bid <= 0.1 else last
+                mk.append({"name": m.get("yes_sub_title") or "", "sfx": m["ticker"].rsplit("-", 1)[-1], "px": px, "v24": fnum(m.get("volume_24h_fp"))})
+            out.append({"ticker": e["event_ticker"], "series": series, "title": e.get("title") or "", "day": day, "markets": mk, "v24": sum(x["v24"] for x in mk)})
+        except Exception:
+            continue
+    return out
+
+
+def fetch_markets(games, now):
+    M = {"errors": [], "lb": {}, "traders": [], "shared": [], "poly_trending": [], "kalshi_trending": [], "matched": {"polymarket": 0, "kalshi": 0}}
+    # ---- Polymarket leaderboard (sports category)
+    for period in ("DAY", "WEEK", "MONTH", "ALL"):
+        d = fetch_json(f"{POLY_DATA}leaderboard?category=SPORTS&timePeriod={period}&orderBy=PNL&limit=25")
+        rows = (d or {}).get("data") if isinstance(d, dict) else None
+        if rows:
+            M["lb"][period] = [{"rank": r.get("rank"), "id": r.get("user_id"), "name": (r.get("user_name") or "")[:28] or (r.get("user_id") or "")[:10], "pnl": round(fnum(r.get("pnl"))), "vol": round(fnum(r.get("volume")))} for r in rows]
+    if not M["lb"]:
+        M["errors"].append("Polymarket leaderboard unavailable")
+    # ---- Polymarket markets: trending + game prices
+    pm = poly_markets()
+    if not pm:
+        M["errors"].append("Polymarket markets unavailable")
+    seen = set()
+    for m in sorted(pm, key=lambda m: -m["v24"]):
+        if m["slug"].startswith(ESPORTS) or (m["q"], m["slug"]) in seen or len(m["outs"]) != 2 or len(m["px"]) != 2:
+            continue
+        seen.add((m["q"], m["slug"]))
+        i = 0 if m["px"][0] >= m["px"][1] else 1
+        M["poly_trending"].append({"q": m["q"], "kind": m["kind"], "slug": m["slug"], "start": m["start"], "fav": m["outs"][i], "p": round(m["px"][i], 3), "v24": round(m["v24"])})
+        if len(M["poly_trending"]) >= 30:
+            break
+    by_slug = {}
+    for m in pm:
+        if m["kind"] == "moneyline" and m["start"]:
+            by_slug.setdefault(m["slug"], []).append(m)
+
+    def start_close(a, b, hours=3):
+        try:
+            return abs((datetime.fromisoformat(a.replace("Z", "+00:00")) - datetime.fromisoformat(b.replace("Z", "+00:00"))).total_seconds()) <= hours * 3600
+        except Exception:
+            return False
+    for g in games:
+        hk, ak = team_keys(g["home"]), team_keys(g["away"])
+        for slug, ms in by_slug.items():
+            if not start_close(ms[0]["start"], g["date"]):
+                continue
+            res = {}
+            for m in ms:
+                if len(m["outs"]) != 2 or len(m["px"]) != 2:
+                    continue
+                if m["outs"] == ["Yes", "No"]:  # soccer: one yes/no market per outcome
+                    q = m["q"]
+                    if q.startswith("Will ") and " win on " in q:
+                        nm = nrm(q[5:q.index(" win on ")])
+                        if nm in hk: res["home"] = m["px"][0]
+                        elif nm in ak: res["away"] = m["px"][0]
+                    elif q.startswith("Will ") and " end in a draw" in q and " vs. " in q:
+                        a_, b_ = q[5:q.index(" end in a draw")].split(" vs. ", 1)
+                        if {nrm(a_) in hk or nrm(a_) in ak, nrm(b_) in hk or nrm(b_) in ak} == {True}:
+                            res["draw"] = m["px"][0]
+                else:
+                    o0, o1 = nrm(m["outs"][0]), nrm(m["outs"][1])
+                    if o0 in hk and o1 in ak: res["home"], res["away"] = m["px"][0], m["px"][1]
+                    elif o0 in ak and o1 in hk: res["away"], res["home"] = m["px"][0], m["px"][1]
+            if "home" in res and "away" in res and (g["sp"] != "soccer" or "draw" in res):
+                tot = sum(res.values())
+                if 0.9 <= tot <= 1.1:
+                    g.setdefault("mk", {})["poly"] = {**{k: round(v / tot, 3) for k, v in res.items()}, "slug": slug, "v24": round(sum(m["v24"] for m in ms))}
+                    M["matched"]["polymarket"] += 1
+                    break
+    # ---- Kalshi: game prices + trending
+    k_all = []
+    for sp, series_list in KALSHI_SERIES.items():
+        if not any(g["sp"] == sp for g in games):
+            continue
+        for series in series_list:
+            evs = kalshi_events(series)
+            k_all += [dict(e, sp=sp) for e in evs]
+    if not k_all:
+        M["errors"].append("Kalshi markets unavailable")
+    for g in games:
+        gd = datetime.fromisoformat(g["date"].replace("Z", "+00:00")).astimezone(ET).date()
+        hk, ak = team_keys(g["home"]), team_keys(g["away"])
+        ha, aa = g["home"]["a"].upper(), g["away"]["a"].upper()
+        for e in k_all:
+            if e["sp"] != g["sp"] or abs((datetime.fromisoformat(e["day"]).date() - gd).days) > 1:
+                continue
+            res = {}
+            for m in e["markets"]:
+                nm = nrm(m["name"])
+                if nm in ("tie", "draw"): res["draw"] = m["px"]
+                elif nm in hk or (m["sfx"] == ha and nm not in ak): res["home"] = m["px"]
+                elif nm in ak or (m["sfx"] == aa and nm not in hk): res["away"] = m["px"]
+            if "home" in res and "away" in res and len(e["markets"]) == len(res):
+                tot = sum(res.values())
+                if 0.85 <= tot <= 1.15:
+                    g.setdefault("mk", {})["kalshi"] = {**{k: round(v / tot, 3) for k, v in res.items()}, "ticker": e["ticker"], "series": e["series"], "v24": round(e["v24"])}
+                    M["matched"]["kalshi"] += 1
+                    break
+    for e in sorted(k_all, key=lambda e: -e["v24"])[:20]:
+        if e["v24"] <= 0 or not e["markets"]:
+            continue
+        fav = max(e["markets"], key=lambda m: m["px"])
+        M["kalshi_trending"].append({"title": e["title"], "sp": e["sp"], "day": e["day"], "fav": fav["name"], "p": round(fav["px"], 3), "v24": round(e["v24"]), "ticker": e["ticker"], "series": e["series"]})
+    # ---- top traders' open positions (this week's sports leaderboard)
+    today = now.date().isoformat()
+    game_slugs = {g["mk"]["poly"]["slug"]: g for g in games if g.get("mk", {}).get("poly")}
+    agg = {}
+    for r in (M["lb"].get("WEEK") or [])[:TOP_TRADERS]:
+        d = fetch_json(f"{POLY_DATA}positions?user={r['id']}&limit=100&sort_by=current_value")
+        rows = (d or {}).get("data") if isinstance(d, dict) else None
+        if rows is None:
+            continue
+        pos = []
+        for p in rows:
+            if p.get("status") != "OPEN" or p.get("redeemable") or fnum(p.get("current_value")) < 50 or (p.get("end_date") or "9999") < today:
+                continue
+            slug = p.get("event_slug") or ""
+            parts = slug.split("-")
+            is_game = any(len(x) == 4 and x.isdigit() for x in parts[-4:-1]) and not slug.startswith(ESPORTS) and len(parts) >= 5 and parts[1].isalpha() and len(parts[1]) <= 6
+            item = {"title": (p.get("title") or "")[:90], "out": p.get("outcome") or "", "slug": slug, "avg": round(fnum(p.get("avg_price")), 3), "cur": round(fnum(p.get("current_price")), 3),
+                    "val": round(fnum(p.get("current_value"))), "pnl": round(fnum(p.get("unrealized_pnl"))), "game": is_game}
+            pos.append(item)
+            if is_game:
+                a = agg.setdefault((slug, item["title"], item["out"]), {"n": 0, "val": 0, "who": []})
+                a["n"] += 1; a["val"] += item["val"]; a["who"].append(r["name"])
+        pos.sort(key=lambda x: (not x["game"], -x["val"]))
+        M["traders"].append({"rank": r["rank"], "id": r["id"], "name": r["name"], "pnl": r["pnl"], "vol": r["vol"], "open": len(pos), "positions": pos[:10]})
+    if M["lb"] and not M["traders"]:
+        M["errors"].append("Polymarket positions unavailable")
+    for (slug, title, out), a in sorted(agg.items(), key=lambda kv: (-kv[1]["n"], -kv[1]["val"]))[:25]:
+        M["shared"].append({"slug": slug, "title": title, "out": out, "n": a["n"], "val": a["val"], "who": a["who"][:6]})
+        g = game_slugs.get(slug)
+        if g is not None:
+            g["mk"].setdefault("smart", []).append({"title": title, "out": out, "n": a["n"], "val": a["val"]})
+    return M
+
+
 LEDGER_KEYS = ("picks", "parlays", "perf", "daily", "parlay_perf", "log", "results", "trends", "blend")
 
 
@@ -593,13 +850,22 @@ def build_model(today, cache=None, fresh=None):
 def run(args):
     now = datetime.now(timezone.utc); today = now.astimezone(ET).date()
     # recent and upcoming days are downloaded once and reused for training, grading and pricing
-    window = {}; failed_total = 0
+    window = {}; failed_total = 0; stale = []
+    prev = None
+    if args.data and os.path.exists(args.data):
+        try:
+            prev = json.load(open(args.data))
+        except Exception:
+            prev = None
     for lg in LEAGUES:
         ahead = SOCCER_DAYS if LEAGUES[lg][0] == "soccer" else 8
-        window[lg], failed = fetch_days(lg, [(today + timedelta(days=i)).strftime("%Y%m%d") for i in range(-4, ahead)])
-        failed_total += failed
-    if failed_total > 4:
-        sys.exit(f"ERROR: {failed_total} feed requests failed; aborting without saving.")
+        evs, failed = fetch_days(lg, [(today + timedelta(days=i)).strftime("%Y%m%d") for i in range(-6, ahead)])
+        if failed > 2 or lg in BAD_DATES:   # this league's feed is unhealthy: leave its history and picks untouched
+            stale.append(lg); window[lg] = []
+        else:
+            window[lg] = evs; failed_total += failed
+    if len(stale) == len(LEAGUES):
+        sys.exit("ERROR: every league feed failed or returned invalid data; aborting without saving.")
     S = build_model(today, args.cache, window)
     led = load_state(args.state) if os.path.exists(args.state) else {}
     for k in LEDGER_KEYS:
@@ -612,6 +878,11 @@ def run(args):
     for lg in LEAGUES:
         evs = window[lg]
         L = lstate(S, lg); sec = LEAGUES[lg][0]
+        if lg in stale:  # show the last good picks for this league instead of dropping its games
+            for g in (prev or {}).get("games", []):
+                if g.get("lg") == lg and datetime.fromisoformat(g["date"].replace("Z", "+00:00")) > now:
+                    g.pop("mk", None); games.append(g)
+            continue
         for e in sorted(evs, key=lambda e: e["date"]):
             if not (e["final"] and e["home"]["score"] is not None and e["away"]["score"] is not None):
                 continue
@@ -658,12 +929,16 @@ def run(args):
             if od.get("tot") is not None and od.get("tot_open") is not None and od["tot"] != od["tot_open"]:
                 tr.append(f"Total moved from {od['tot_open']:g} to {od['tot']:g}")
             games.append({"id": e["id"], "lg": lg, "sp": sec, "league": e.get("league") or LEAGUES[lg][1], "sgp": pr.get("sgp", []), "date": e["date"], "book": od.get("book"),
-                          "home": {"n": e["home"]["name"], "a": e["home"]["abbr"], "rec": e["home"]["rec"], "elo": round(H["elo"]), "g": H["g"]},
-                          "away": {"n": e["away"]["name"], "a": e["away"]["abbr"], "rec": e["away"]["rec"], "elo": round(A["elo"]), "g": A["g"]},
+                          "home": {"n": e["home"]["name"], "a": e["home"]["abbr"], "rec": e["home"]["rec"], "elo": round(H["elo"]), "g": H["g"], "loc": e["home"].get("loc", ""), "nick": e["home"].get("nick", ""), "short": e["home"].get("short", "")},
+                          "away": {"n": e["away"]["name"], "a": e["away"]["abbr"], "rec": e["away"]["rec"], "elo": round(A["elo"]), "g": A["g"], "loc": e["away"].get("loc", ""), "nick": e["away"].get("nick", ""), "short": e["away"].get("short", "")},
                           "proj": {"margin": round(pr["mu"], 1), "total": round(pr["tot"], 1), "p_h": round(pr["p_h"], 3), "p_d": round(pr["p_d"], 3), "p_a": round(pr["p_a"], 3)},
                           "picks": sorted(picks, key=lambda x: -x["p"]), "trends": tr})
-    if not games and failed_total:
-        sys.exit(f"ERROR: no upcoming games and {failed_total} feed requests failed; aborting without saving.")
+    if not games and (failed_total or stale):
+        sys.exit(f"ERROR: no upcoming games and feed requests failed; aborting without saving.")
+    notices = []
+    if stale:
+        names = ", ".join(LEAGUES[lg][1] for lg in stale)
+        notices.append(f"{names}: the data source returned invalid data on this update, so these picks are the last good ones and are not being refreshed or graded until it recovers.")
     # grade stored parlays
     R = S["results"]
     for key, grp in S["parlays"].items():
@@ -715,11 +990,15 @@ def run(args):
     S["parlays"] = {k: v for k, v in S["parlays"].items() if k.split(":", 1)[1] >= lim}
     S["results"] = {k: v for k, v in S["results"].items() if v[2] >= lim}
     S["daily"] = {k: v for k, v in S["daily"].items() if k >= (today - timedelta(days=180)).isoformat()}
-    msg = f"Graded {graded_now} picks; {len(games)} upcoming games priced." + (f" {failed_total} feed requests failed." if failed_total else "")
+    msg = f"Graded {graded_now} picks; {len(games)} upcoming games priced." + (f" {failed_total} feed requests failed." if failed_total else "") + (f" Source problem for: {', '.join(stale)}." if stale else "")
     S["log"] = (S["log"] + [{"t": now.isoformat(timespec="seconds"), "msg": msg + " Model retrained on " + str(sum(L["n"] for L in S["leagues"].values())) + " past games."}])[-40:]
     led = {k: S[k] for k in LEDGER_KEYS}
     led["calib"] = {k: v for k, v in S["calib"].items() if not k.endswith(":ml")}; led["version"] = 2
     save_state(led, args.state)
+    try:
+        markets = fetch_markets(games, now)
+    except Exception as ex:  # never let the optional market data break the picks
+        markets = {"errors": [f"Prediction market data failed: {type(ex).__name__}"], "lb": {}, "traders": [], "shared": [], "poly_trending": [], "kalshi_trending": [], "matched": {}}
     recent = sorted([p for p in S["picks"].values() if p["st"] != "pending"], key=lambda p: p["d"], reverse=True)[:400]
     past_parlays = [{"key": k, "parlays": [p for p in v["parlays"] if p["st"] != "pending"]} for k, v in sorted(S["parlays"].items(), reverse=True)]
     model = {lg: {"league": LEAGUES[lg][1], "hfa": round(L["hfa"], 1), "sig": round(L["sig"], 2), "tsig": round(L["tsig"], 2), "avg": round(L["avg"], 2), "games": L["n"], "teams": len(L["teams"]),
@@ -727,13 +1006,14 @@ def run(args):
     data = {"generated": now.isoformat(timespec="seconds"), "games": sorted(games, key=lambda g: g["date"]), "parlays": live_parlays, "perf": S["perf"],
             "daily": S["daily"], "backtest": S["backtest"], "recent": recent, "past_parlays": [p for p in past_parlays if p["parlays"]],
             "parlay_perf": S["parlay_perf"], "model": model, "log": S["log"][::-1], "calib": {k: {"a": v["a"], "n": v["n"]} for k, v in S["calib"].items()},
-            "blend": {k: v.get("w") for k, v in S["blend"].items()}, "default_blend": DEFAULT_BLEND, "soccer_days": SOCCER_DAYS}
+            "blend": {k: v.get("w") for k, v in S["blend"].items()}, "default_blend": DEFAULT_BLEND, "soccer_days": SOCCER_DAYS, "markets": markets, "notices": notices}
     if args.data:
         json.dump(data, open(args.data, "w"), separators=(",", ":"))
     if args.template and args.out:  # single-file dashboard with the data baked in
         html = open(args.template).read().replace("/*__DATA__*/null", json.dumps(data, separators=(",", ":")).replace("</", "<\\/"))
         open(args.out, "w").write(html)
-    print(msg); print("games:", len(games), "| parlay groups:", len(live_parlays), "| state bytes:", os.path.getsize(args.state))
+    print(msg); print("games:", len(games), "| parlay groups:", len(live_parlays), "| state bytes:", os.path.getsize(args.state),
+          "| market matches:", markets.get("matched"), "| traders:", len(markets.get("traders", [])), "| market errors:", markets.get("errors"))
 
 
 if __name__ == "__main__":
