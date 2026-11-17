@@ -524,7 +524,7 @@ def build_parlays(pool, tag):
     plus = [x for x in by_p if amer_to_dec(x["odds"]) >= 1.3]
     put("Balanced 4-Leg", plus[:4], "Four solid picks, skipping the heaviest favorites so the payout is worth it.")
     val = sorted([x for x in pool if x["p"] >= 0.5 and (x["ev"] or -1) > 0], key=lambda x: -x["ev"])
-    put("Value Treble", val[:3], "Three picks where the model sees the biggest edge over the sportsbook price.")
+    put("Value Treble" if len(val) >= 3 else "Value Double", val[:3], "The picks where the model sees the biggest edge over the sportsbook price.")
     price = [x for x in by_p if amer_to_dec(x["odds"]) >= 1.6]
     put("Long Shot 5-Leg", price[:5], "Five picks at meaningful prices. Low hit rate, large payout.")
     put("Lottery 7-Leg", price[:7], "Seven legs. For fun only.")
@@ -776,6 +776,262 @@ def fetch_markets(games, now):
     return M
 
 
+# ---------------------------------------------------------------- player props (NBA and NFL)
+# Lines come from the same feed's prop listings; projections come from each player's game log.
+CORE = "https://sports.core.api.espn.com/v2/sports/"
+GAMELOG = "https://site.web.api.espn.com/apis/common/v3/sports/"
+PROP_SPORTS = {"nba": ("basketball/nba", "basketball/leagues/nba", 36), "nfl": ("football/nfl", "football/leagues/nfl", 150)}   # hours ahead to look for lines
+PROP_STATS = {
+    "nba": {"Total Points": (["points"], "points"), "Total Rebounds": (["totalRebounds"], "rebounds"), "Total Assists": (["assists"], "assists"),
+            "Total 3-Point Field Goals": (["threes"], "three-pointers"), "Total Points and Rebounds": (["points", "totalRebounds"], "points + rebounds"),
+            "Total Points and Assists": (["points", "assists"], "points + assists"), "Total Assists and Rebounds": (["assists", "totalRebounds"], "rebounds + assists"),
+            "Total Points, Rebounds, and Assists": (["points", "totalRebounds", "assists"], "points + rebounds + assists"),
+            "Total Steals": (["steals"], "steals"), "Total Blocks": (["blocks"], "blocks")},
+    "nfl": {"Total Passing Yards": (["passingYards"], "passing yards"), "Total Pass Completions": (["completions"], "completions"), "Total Passing Attempts": (["passingAttempts"], "pass attempts"),
+            "Total Passing Touchdowns": (["passingTouchdowns"], "passing touchdowns"), "Total Passing Interceptions": (["interceptions"], "interceptions"),
+            "Total Rushing Yards": (["rushingYards"], "rushing yards"), "Total Carries": (["rushingAttempts"], "carries"),
+            "Total Receiving Yards": (["receivingYards"], "receiving yards"), "Total Receptions": (["receptions"], "receptions"),
+            "Total Passing Plus Rushing Yards": (["passingYards", "rushingYards"], "passing + rushing yards"),
+            "Total Rushing Plus Receiving Yards": (["rushingYards", "receivingYards"], "rushing + receiving yards")},
+}
+PROP_PRICE_EST = -115      # used for payout estimates when the feed has no price for a line
+PROPS_PER_GAME = 12
+
+
+def _roster(sp, team_id):
+    d = fetch_json(f"https://site.api.espn.com/apis/site/v2/sports/{PROP_SPORTS[sp][0]}/teams/{team_id}/roster")
+    out = {}
+    for grp in (d or {}).get("athletes") or []:
+        for a in (grp.get("items") if isinstance(grp, dict) and "items" in grp else [grp]):
+            if isinstance(a, dict) and a.get("id"):
+                out[str(a["id"])] = a.get("displayName") or a.get("fullName") or ""
+    return out
+
+
+def _gamelog(sp, aid):
+    """Per-game numbers for one player this regular season, newest first: [[eventId, date, {stat: value}], ...]"""
+    d = fetch_json(f"{GAMELOG}{PROP_SPORTS[sp][0]}/athletes/{aid}/gamelog")
+    if not isinstance(d, dict) or not d.get("names"):
+        return None
+    names, evs, rows = d["names"], d.get("events") or {}, []
+    for st in d.get("seasonTypes") or []:
+        if "regular" not in (st.get("displayName") or "").lower():
+            continue
+        for cat in st.get("categories") or []:
+            for e in cat.get("events") or []:
+                vals = {}
+                for n, v in zip(names, e.get("stats") or []):
+                    if n.startswith("threePointFieldGoalsMade"):
+                        n, v = "threes", str(v).split("-")[0]
+                    try:
+                        vals[n] = float(str(v).replace(",", ""))
+                    except Exception:
+                        pass
+                eid = str(e.get("eventId"))
+                rows.append([eid, ((evs.get(eid) or {}).get("gameDate") or "")[:10], vals])
+    rows.sort(key=lambda r: r[1], reverse=True)
+    return rows
+
+
+def _prop_prob(vals, line):
+    """Chance of going over the line from recent games: recency-weighted average plus how often it actually happened."""
+    n = len(vals)
+    w = [0.9 ** i for i in range(n)]
+    mu = sum(v * x for v, x in zip(vals, w)) / sum(w)
+    var = sum(x * (v - mu) ** 2 for v, x in zip(vals, w)) / sum(w)
+    sd = max(math.sqrt(var), 0.35 * math.sqrt(max(mu, 0.5)) + 0.08 * mu, 0.6)
+    p_norm = 1 - phi((line - mu) / sd)
+    emp = (sum(1 for v in vals if v > line) + 1) / (n + 2)
+    raw = 0.6 * p_norm + 0.4 * emp
+    return 0.5 + 0.45 * (raw - 0.5), mu     # pulled toward 50%: the lines are set by professionals
+
+
+def fetch_props(S, games, cache, now):
+    meta = {"errors": [], "lines": 0, "players": 0, "graded": 0}
+    store = {}
+    cf = os.path.join(cache, "players.json.gz") if cache else None
+    if cf and os.path.exists(cf):
+        try:
+            store = json.loads(gzip.decompress(open(cf, "rb").read()))
+        except Exception:
+            store = {}
+    logs, rosters = store.setdefault("logs", {}), store.setdefault("rosters", {})
+
+    def log_for(sp, aid, newer_than=None):
+        key = f"{sp}:{aid}"; c = logs.get(key)
+        age_ok = c and (now - datetime.fromisoformat(c["t"])).total_seconds() < 20 * 3600
+        if c and newer_than and datetime.fromisoformat(c["t"]) < newer_than:
+            age_ok = False
+        if not age_ok:
+            rows = _gamelog(sp, aid)
+            if rows is None:
+                return (c or {}).get("g")
+            c = logs[key] = {"t": now.isoformat(timespec="seconds"), "g": rows[:25]}
+        return c["g"]
+
+    # ---- grade earlier player picks from the box scores
+    pend = [p for p in S["props"].values() if p["st"] == "pending" and datetime.fromisoformat(p["d"].replace("Z", "+00:00")) + timedelta(hours=5) < now]
+    need = {}
+    for p in pend:
+        need.setdefault((p["sp"], p["aid"]), datetime.fromisoformat(p["d"].replace("Z", "+00:00")) + timedelta(hours=5))
+    with ThreadPoolExecutor(6) as ex:
+        got = dict(zip(need, ex.map(lambda kv: log_for(kv[0][0], kv[0][1], kv[1]), need.items())))
+    for p in pend:
+        rows = got.get((p["sp"], p["aid"])) or []
+        row = next((r for r in rows if r[0] == p["eid"]), None)
+        if row is None:
+            if (now - datetime.fromisoformat(p["d"].replace("Z", "+00:00"))).days >= 3:
+                p["st"] = "void"      # did not play, or the game is missing from the log
+            continue
+        val = sum(row[2].get(k, 0) for k in p["keys"])
+        p["val"] = val
+        p["st"] = "push" if val == p["line"] else "win" if (val > p["line"]) == (p["sel"] == "over") else "loss"
+        r = S["prop_perf"].setdefault(p["sp"], {}).setdefault(p["tier"], [0, 0, 0])
+        r[0 if p["st"] == "win" else 1 if p["st"] == "loss" else 2] += 1
+        meta["graded"] += 1
+    # ---- new lines
+    out = []
+    for g in games:
+        sp = g["sp"]
+        if sp not in PROP_SPORTS or not g["home"].get("id"):
+            continue
+        start = datetime.fromisoformat(g["date"].replace("Z", "+00:00"))
+        if not (now < start <= now + timedelta(hours=PROP_SPORTS[sp][2])):
+            continue
+        items, page, pages = [], 1, 1
+        while page <= pages and page <= 3:
+            d = fetch_json(f"{CORE}{PROP_SPORTS[sp][1]}/events/{g['id']}/competitions/{g['id']}/odds/100/propBets?limit=1000&page={page}")
+            if not isinstance(d, dict) or "items" not in d:
+                break
+            items += d["items"]; pages = d.get("pageCount") or 1; page += 1
+        lines = {}
+        for it in items:
+            try:
+                tname = it["type"]["name"].replace(" (incl. overtime)", "")
+                if tname not in PROP_STATS[sp] or "athlete" not in it:
+                    continue
+                aid = it["athlete"]["$ref"].split("/athletes/")[1].split("?")[0]
+                line = fnum(((it.get("current") or {}).get("target") or {}).get("value"), None)
+                if line is None:
+                    continue
+                L = lines.setdefault((aid, tname), {"line": line, "px": []})
+                am = to_int(((it.get("odds") or {}).get("american") or {}).get("value"))
+                if am is not None:
+                    L["px"].append(amer_to_dec(am))
+            except Exception:
+                continue
+        if not lines:
+            continue
+        for side in ("home", "away"):
+            tid = f"{sp}:{g[side]['id']}"; c = rosters.get(tid)
+            if not c or (now - datetime.fromisoformat(c["t"])).total_seconds() > 24 * 3600:
+                r = _roster(sp, g[side]["id"])
+                if r:
+                    rosters[tid] = {"t": now.isoformat(timespec="seconds"), "p": r}
+        who = {}
+        for side in ("home", "away"):
+            for aid, nm in ((rosters.get(f"{sp}:{g[side]['id']}") or {}).get("p") or {}).items():
+                who[aid] = (nm, g[side]["a"])
+        aids = sorted({aid for aid, _ in lines if aid in who})
+        with ThreadPoolExecutor(6) as ex:
+            glogs = dict(zip(aids, ex.map(lambda a: log_for(sp, a), aids)))
+        cand = []
+        for (aid, tname), L in lines.items():
+            rows = glogs.get(aid)
+            if not rows:
+                continue
+            keys, label = PROP_STATS[sp][tname]
+            vals = [sum(r[2].get(k, 0) for k in keys) for r in rows if r[0] != g["id"] and all(k in r[2] for k in keys)][:12]
+            if len(vals) < 5:
+                continue
+            meta["lines"] += 1
+            p_over, mu = _prop_prob(vals, L["line"])
+            if not L["px"] and L["line"] < 3:
+                continue    # tiny lines are priced far from even money; without a posted price the payout would mislead
+            if L["px"] and (len(L["px"]) != 2 or max(L["px"]) / min(L["px"]) > 1.12):
+                continue    # the feed does not say which price is the over and which the under, so only near-even lines can be priced honestly
+            if abs(L["line"] - mu) > max(1.0, 0.25 * max(L["line"], mu)):
+                continue    # line far from the player's recent numbers: the book knows something the game log does not (role change, injury)
+            sel, p = ("over", p_over) if p_over >= 0.5 else ("under", 1 - p_over)
+            p = min(p, 0.66)
+            nm, tm_ = who[aid]
+            price = dec_to_amer(sum(L["px"]) / len(L["px"])) if L["px"] else None
+            cand.append({"id": f"{g['id']}:{aid}:{'+'.join(keys)}", "eid": g["id"], "aid": aid, "lg": g["lg"], "sp": sp, "d": g["date"], "mkt": "prop", "sel": sel, "keys": keys,
+                         "player": nm, "team": tm_, "stat": label, "line": L["line"], "label": f"{nm} {sel} {L['line']:g} {label}", "odds": price if price is not None else PROP_PRICE_EST,
+                         "est": price is None, "p": round(p, 4), "tier": tier_of(p), "avg": round(sum(vals) / len(vals), 1), "proj": round(mu, 1), "last": [round(v, 1) for v in vals[:5]], "n": len(vals),
+                         "game": f"{g['away']['n']} at {g['home']['n']}", "st": "pending"})
+        cand.sort(key=lambda x: -x["p"])
+        seen_player, keep = {}, []
+        for c in cand:                      # at most three lines per player, best first
+            if c["p"] < 0.54 or seen_player.get(c["aid"], 0) >= 3:
+                continue
+            seen_player[c["aid"]] = seen_player.get(c["aid"], 0) + 1; keep.append(c)
+            if len(keep) >= PROPS_PER_GAME:
+                break
+        out += keep
+        meta["players"] += len({c["aid"] for c in keep})
+    for c in out:
+        old = S["props"].get(c["id"])
+        if not old or old["st"] == "pending":
+            S["props"][c["id"]] = {k: c[k] for k in ("id", "eid", "aid", "sp", "d", "sel", "keys", "line", "label", "p", "tier", "odds", "st", "game")}
+    # keep the player cache small
+    cut = (now - timedelta(days=5)).isoformat()
+    store["logs"] = {k: v for k, v in logs.items() if v["t"] >= cut}
+    if cf:
+        os.makedirs(cache, exist_ok=True)
+        open(cf, "wb").write(gzip.compress(json.dumps(store, separators=(",", ":")).encode(), 6))
+    return out, meta
+
+
+def sport_parlays(games, props):
+    """Parlays built separately for each sport: game picks, player picks, and mixes of the two."""
+    out = {}
+    names = {"nfl": "NFL", "nba": "NBA", "cfb": "College Football", "soccer": "Soccer"}
+    for sp in names:
+        best = []
+        for g in games:
+            if g["sp"] != sp:
+                continue
+            c = [p for p in g["picks"] if p["odds"] is not None and amer_to_dec(p["odds"]) >= 1.05]
+            if c:
+                best.append(max(c, key=lambda x: x["p"]))
+        grp = build_parlays(best, sp) if len(best) >= 2 else {"tag": sp, "parlays": [], "rr": []}
+        grp["parlays"] = [p for p in grp["parlays"] if not p["name"].endswith(" Treble") or p["name"] in ("Safe Treble", "Value Treble")]
+        pp = sorted([p for p in props if p["sp"] == sp], key=lambda x: -x["p"])
+        one = []                              # one line per player, spread across games where possible
+        for p in pp:
+            if all(p["aid"] != q["aid"] for q in one):
+                one.append(p)
+        spread, used = [], {}
+        for p in one:
+            if used.get(p["eid"], 0) < 2:
+                spread.append(p); used[p["eid"]] = used.get(p["eid"], 0) + 1
+        pl, combos = [], []
+        if len(spread) >= 2:
+            pl.append(parlay("Player Double", spread[:2], "The two most likely player picks."))
+        if len(spread) >= 3:
+            pl.append(parlay("Player Treble", spread[:3], "Top three player picks, each a different player."))
+        if len(spread) >= 5:
+            pl.append(parlay("Player 5-Leg", spread[:5], "Five player picks. Lower chance, bigger payout."))
+        overs = [p for p in spread if p["sel"] == "over"]
+        if len(overs) >= 3:
+            pl.append(parlay("Overs Treble", overs[:3], "Three players projected to go over their line."))
+        strong = [b for b in sorted(best, key=lambda x: -x["p"]) if b["p"] >= 0.6]
+        if strong and spread:
+            a = strong[0]; others = [p for p in spread if p["eid"] != a["eid"]]
+            if len(others) >= 1:
+                combos.append(parlay("Game + Player", [a, others[0]], "The best game pick with the best player pick from a different game."))
+            if len(others) >= 2:
+                combos.append(parlay("Game + 2 Players", [a] + others[:2], "One game pick and two player picks from other games."))
+            if len(strong) >= 2 and len(others) >= 2:
+                combos.append(parlay("2 Games + 2 Players", strong[:2] + [p for p in spread if p["eid"] not in (strong[0]["eid"], strong[1]["eid"])][:2], "Two game picks and two player picks."))
+        for q in pl + combos:
+            q["est"] = any(l.get("mkt") == "prop" for l in q["legs"])
+        sg = sorted([dict(c, game=f"{g['away']['a']} at {g['home']['a']}", d=g["date"]) for g in games if g["sp"] == sp for c in g.get("sgp", []) if c["name"] == "Safest"], key=lambda c: -c["p"])[:8]
+        out[sp] = {"game": grp["parlays"], "rr": grp["rr"], "players": pl, "combos": [c for c in combos if c["n"] >= 2], "sgp": sg}
+    return out
+
+
 ODDS_API = "https://api.the-odds-api.com/v4/sports/"
 
 
@@ -844,7 +1100,7 @@ def fetch_odds_api(games, cache, now):
     return meta
 
 
-LEDGER_KEYS = ("picks", "parlays", "perf", "daily", "parlay_perf", "log", "results", "trends", "blend")
+LEDGER_KEYS = ("picks", "parlays", "perf", "daily", "parlay_perf", "log", "results", "trends", "blend", "props", "prop_perf")
 
 
 def slim(e):
@@ -1002,8 +1258,8 @@ def run(args):
                 tr.append(f"Total moved from {od['tot_open']:g} to {od['tot']:g}")
             games.append({"id": e["id"], "lg": lg, "sp": sec, "league": e.get("league") or LEAGUES[lg][1], "sgp": pr.get("sgp", []), "date": e["date"], "book": od.get("book"),
                           "odds": {k: od.get(k) for k in ("ml_h", "ml_a", "ml_d", "sp", "sp_h", "sp_a", "tot", "tot_o", "tot_u") if od.get(k) is not None},
-                          "home": {"n": e["home"]["name"], "a": e["home"]["abbr"], "rec": e["home"]["rec"], "elo": round(H["elo"]), "g": H["g"], "loc": e["home"].get("loc", ""), "nick": e["home"].get("nick", ""), "short": e["home"].get("short", "")},
-                          "away": {"n": e["away"]["name"], "a": e["away"]["abbr"], "rec": e["away"]["rec"], "elo": round(A["elo"]), "g": A["g"], "loc": e["away"].get("loc", ""), "nick": e["away"].get("nick", ""), "short": e["away"].get("short", "")},
+                          "home": {"id": e["home"]["id"], "n": e["home"]["name"], "a": e["home"]["abbr"], "rec": e["home"]["rec"], "elo": round(H["elo"]), "g": H["g"], "loc": e["home"].get("loc", ""), "nick": e["home"].get("nick", ""), "short": e["home"].get("short", "")},
+                          "away": {"id": e["away"]["id"], "n": e["away"]["name"], "a": e["away"]["abbr"], "rec": e["away"]["rec"], "elo": round(A["elo"]), "g": A["g"], "loc": e["away"].get("loc", ""), "nick": e["away"].get("nick", ""), "short": e["away"].get("short", "")},
                           "proj": {"margin": round(pr["mu"], 1), "total": round(pr["tot"], 1), "p_h": round(pr["p_h"], 3), "p_d": round(pr["p_d"], 3), "p_a": round(pr["p_a"], 3)},
                           "picks": sorted(picks, key=lambda x: -x["p"]), "trends": tr})
     if not games and (failed_total or stale):
@@ -1065,17 +1321,26 @@ def run(args):
     S["daily"] = {k: v for k, v in S["daily"].items() if k >= (today - timedelta(days=180)).isoformat()}
     msg = f"Graded {graded_now} picks; {len(games)} upcoming games priced." + (f" {failed_total} feed requests failed." if failed_total else "") + (f" Source problem for: {', '.join(stale)}." if stale else "")
     S["log"] = (S["log"] + [{"t": now.isoformat(timespec="seconds"), "msg": msg + " Model retrained on " + str(sum(L["n"] for L in S["leagues"].values())) + " past games."}])[-40:]
-    led = {k: S[k] for k in LEDGER_KEYS}
-    led["calib"] = {k: v for k, v in S["calib"].items() if not k.endswith(":ml")}; led["version"] = 2
-    save_state(led, args.state)
     try:
         markets = fetch_markets(games, now)
     except Exception as ex:  # never let the optional market data break the picks
         markets = {"errors": [f"Prediction market data failed: {type(ex).__name__}"], "lb": {}, "traders": [], "shared": [], "poly_trending": [], "kalshi_trending": [], "matched": {}}
     try:
+        props, props_meta = fetch_props(S, games, args.cache, now)
+    except Exception as ex:
+        props, props_meta = [], {"errors": [f"Player picks failed: {type(ex).__name__}"], "lines": 0, "players": 0, "graded": 0}
+    S["props"] = {k: v for k, v in S["props"].items() if v["d"][:10] >= lim}
+    try:
+        sp_parlays = sport_parlays(games, props)
+    except Exception:
+        sp_parlays = {}
+    try:
         books_meta = fetch_odds_api(games, args.cache, now)
     except Exception as ex:
         books_meta = {"enabled": True, "error": type(ex).__name__, "asof": None, "remaining": None, "matched": 0}
+    led = {k: S[k] for k in LEDGER_KEYS}
+    led["calib"] = {k: v for k, v in S["calib"].items() if not k.endswith(":ml")}; led["version"] = 2
+    save_state(led, args.state)
     recent = sorted([p for p in S["picks"].values() if p["st"] != "pending"], key=lambda p: p["d"], reverse=True)[:400]
     past_parlays = [{"key": k, "parlays": [p for p in v["parlays"] if p["st"] != "pending"]} for k, v in sorted(S["parlays"].items(), reverse=True)]
     model = {lg: {"league": LEAGUES[lg][1], "hfa": round(L["hfa"], 1), "sig": round(L["sig"], 2), "tsig": round(L["tsig"], 2), "avg": round(L["avg"], 2), "games": L["n"], "teams": len(L["teams"]),
@@ -1083,14 +1348,15 @@ def run(args):
     data = {"generated": now.isoformat(timespec="seconds"), "games": sorted(games, key=lambda g: g["date"]), "parlays": live_parlays, "perf": S["perf"],
             "daily": S["daily"], "backtest": S["backtest"], "recent": recent, "past_parlays": [p for p in past_parlays if p["parlays"]],
             "parlay_perf": S["parlay_perf"], "model": model, "log": S["log"][::-1], "calib": {k: {"a": v["a"], "n": v["n"]} for k, v in S["calib"].items()},
-            "blend": {k: v.get("w") for k, v in S["blend"].items()}, "default_blend": DEFAULT_BLEND, "soccer_days": SOCCER_DAYS, "markets": markets, "notices": notices, "books_meta": books_meta}
+            "blend": {k: v.get("w") for k, v in S["blend"].items()}, "default_blend": DEFAULT_BLEND, "soccer_days": SOCCER_DAYS, "markets": markets, "notices": notices, "books_meta": books_meta, "props": props, "props_meta": props_meta, "prop_perf": S["prop_perf"],
+            "sport_parlays": sp_parlays, "props_recent": sorted([p for p in S["props"].values() if p["st"] in ("win", "loss", "push")], key=lambda p: p["d"], reverse=True)[:120]}
     if args.data:
         json.dump(data, open(args.data, "w"), separators=(",", ":"))
     if args.template and args.out:  # single-file dashboard with the data baked in
         html = open(args.template).read().replace("/*__DATA__*/null", json.dumps(data, separators=(",", ":")).replace("</", "<\\/"))
         open(args.out, "w").write(html)
     print(msg); print("games:", len(games), "| parlay groups:", len(live_parlays), "| state bytes:", os.path.getsize(args.state),
-          "| market matches:", markets.get("matched"), "| traders:", len(markets.get("traders", [])), "| market errors:", markets.get("errors"))
+          "| player picks:", len(props), props_meta, "| market matches:", markets.get("matched"), "| traders:", len(markets.get("traders", [])), "| market errors:", markets.get("errors"))
 
 
 if __name__ == "__main__":
