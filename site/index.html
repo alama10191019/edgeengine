@@ -247,6 +247,14 @@ nav button svg{display:none}
   nav button{border-bottom:0;min-height:52px}nav button svg{display:block}nav button.on{color:var(--brand)}
   #pbtn{padding:6px 10px}
 }
+/* ===== community picks ===== */
+.cpost .who{display:flex;justify-content:space-between;gap:8px;align-items:baseline;font-size:13px}.cpost .who b{font-size:14px}
+.cpost .ex{color:var(--text2);font-size:13px;margin:8px 0 0;padding:8px 10px;border-left:3px solid var(--line);background:var(--surface2);border-radius:6px;overflow-wrap:anywhere}
+.cleg{display:grid;grid-template-columns:1fr auto;gap:8px;padding:8px 0;border-top:1px solid var(--line);font-size:14px}.cleg b{font-weight:700}.cleg small{display:block;color:var(--muted);font-size:12px}
+.st{display:inline-block;font-size:11px;font-weight:700;border-radius:999px;padding:1px 8px;border:1px solid var(--line);color:var(--text2);white-space:nowrap}
+.st.win{color:var(--goodtx);border-color:var(--goodtx)}.st.loss{color:#f08a8a;border-color:#f08a8a}
+.tag{display:inline-block;font-size:11px;border:1px solid var(--line);border-radius:6px;padding:0 6px;color:var(--muted);margin-left:4px}
+.share{height:6px;border-radius:3px;background:var(--track);overflow:hidden;min-width:70px}.share i{display:block;height:100%;background:var(--brand)}
 </style>
 </head>
 <body>
@@ -267,11 +275,11 @@ nav button svg{display:none}
 <script src="config.js"></script>
 <script>
 let DATA=/*__DATA__*/null;  // filled in by the engine (single-file mode) or fetched from EDGE_DATA_URL (hosted mode)
-const TABS=[["board","Best Bets"],["odds","Best Odds"],["nfl","NFL"],["nba","NBA"],["soccer","Soccer"],["cfb","College Football"],["build","Build Your Own"],["parlays","Ready-Made"],["trending","Trending"],["leaders","Leaderboards"],["copy","Copy Trading"],["record","Track Record"],["model","How It Works"]];
-const GROUPS=[["picks","Games","board",["board","odds","nfl","nba","soccer","cfb"]],["parlays","Parlays","build",["build","parlays"]],["markets","Markets","trending",["trending","leaders","copy"]],["results","Results","record",["record","model"]]];
+const TABS=[["board","Best Bets"],["odds","Best Odds"],["nfl","NFL"],["nba","NBA"],["soccer","Soccer"],["cfb","College Football"],["build","Build Your Own"],["parlays","Ready-Made"],["trending","Trending"],["leaders","Leaderboards"],["copy","Copy Trading"],["cfeed","Live Feed"],["cparlays","Shared Parlays"],["ctrend","Trending"],["csrc","Sources"],["record","Track Record"],["model","How It Works"]];
+const GROUPS=[["picks","Games","board",["board","odds","nfl","nba","soccer","cfb"]],["parlays","Parlays","build",["build","parlays"]],["markets","Markets","trending",["trending","leaders","copy"]],["community","Community","cfeed",["cfeed","cparlays","ctrend","csrc"]],["results","Results","record",["record","model"]]];
 const TIERS=["Very likely","High","Average","Below average"], TCOL={"Very likely":"--t1","High":"--t2","Average":"--t3","Below average":"--t4"};
 const MK={ml:"Moneyline",spread:"Spread",total:"Total"}, SP={nfl:"NFL",nba:"NBA",cfb:"College Football",soccer:"Soccer",all:"All sports"};
-const S={bsp:"all",bmore:0,psp:"all",osp:"all",q:"",open:new Set(),help:false,lastTab:"",lb:"WEEK",tab:"board",day:"all",tier:"all",mkt:"all",comp:"all",slate:0,stake:10,slip:[],slipStake:10};
+const S={plegs:"all",csp:"all",cmk:"all",clegs:"all",cday:"all",codds:"all",bsp:"all",bmore:0,psp:"all",osp:"all",q:"",open:new Set(),help:false,lastTab:"",lb:"WEEK",tab:"board",day:"all",tier:"all",mkt:"all",comp:"all",slate:0,stake:10,slip:[],slipStake:10};
 const TOPC=/UEFA|FIFA|English Premier|^LALIGA$|^Serie A$|^Bundesliga$|^Ligue 1$|^MLS$|International Friendly|Nations League|Copa America|Libertadores|Copa del Rey|FA Cup|Liga MX|Eredivisie|Liga Portugal/;
 const $=s=>document.querySelector(s), h=(s)=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const pct=(p,d=0)=>p==null?"n/a":(p*100).toFixed(d)+"%";
@@ -294,6 +302,7 @@ copy:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2
 odds:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M4 12h16M4 17h7"/><path d="M17 15l3 3-3 3"/></svg>',
 build:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
 record:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5M4 19h16M8 15l4-5 3 3 4-6"/></svg>',
+cfeed:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg>',
 model:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="6" cy="6" r="2.200"/><circle cx="18" cy="6" r="2.200"/><circle cx="12" cy="18" r="2.200"/><circle cx="12" cy="11" r="1.600"/><path d="M7.600 7.500l3.200 2.500M16.400 7.500l-3.200 2.500M12 12.600v3.200"/></svg>'};
 const hue=str=>{let x=7;for(const c of str)x=(x*31+c.charCodeAt(0))%360;return x};
 const lum=c=>{const n=parseInt(c,16);return (0.299*(n>>16&255)+0.587*(n>>8&255)+0.114*(n&255))/255};
@@ -564,8 +573,9 @@ function parlaysByDay(){
   const lab=t=>t==="week"?"Next 7 days":dayLabel(t);
   let o=`<div class="row"><span class="lab">Slate</span>${G.map((x,i)=>`<button class="chip ${i===S.slate?"on":""}" data-set="slate" data-v="${i}">${lab(x.tag)}</button>`).join("")}
    <span class="lab" style="margin-left:10px">Stake $</span><select data-sel="stake">${[5,10,20,25,50,100].map(v=>`<option ${v===S.stake?"selected":""}>${v}</option>`).join("")}</select></div>
+   <div class="row"><span class="lab">Legs</span>${[["all","All"],["2-3","2 to 3"],["4-6","4 to 6"],["7-10","7 to 10"]].map(([v,l])=>`<button class="chip ${S.plegs===v?"on":""}" data-set="plegs" data-v="${v}">${l}</button>`).join("")}</div>
    <div class="warnbox">Combined chance is each leg's probability multiplied together, one leg per game. Every added leg lowers the chance of hitting. A negative expected value means the payout does not compensate for the risk at these prices. Same-game parlay odds are the two prices multiplied; sportsbooks set their own same-game price, usually lower.</div>
-   <div class="grid">${g.parlays.map(p=>parlayCard(p,S.stake)).join("")}</div>`;
+   <div class="grid">${g.parlays.filter(p=>{if(S.plegs==="all")return true;const [a,b]=S.plegs.split("-").map(Number);return p.n>=a&&p.n<=b}).map(p=>parlayCard(p,S.stake)).join("")||'<div class="empty">No parlays of this size on this slate. Slates already under way keep the parlays they started with.</div>'}</div>`;
   const day=g.tag==="week"?null:g.tag;
   const sg=DATA.games.filter(x=>!day||dayKey(x.date)===day).flatMap(x=>x.sgp.filter(c=>c.name==="Safest").map(c=>({...c,g:x}))).sort((a,b)=>b.p-a.p).slice(0,12);
   if(sg.length) o+=`<h2>Most likely same-game parlays on this slate</h2><div class="card" style="overflow:auto"><table><tr><th>Game</th><th>Parlay</th><th class="num">Chance both hit</th><th class="num">Approx. odds</th><th class="num">Fair odds</th><th class="num">Returns on $${S.stake}</th></tr>
@@ -721,6 +731,73 @@ function builder(){
     ${gs.length>show.length?`<button class="chip" data-more="1">Show more games (${gs.length-show.length} more)</button>`:""}
   </div><div class="panel">${panel}</div></div>`;
 }
+/* ---- community picks: real public posts collected by community.py ---- */
+const CM=()=>DATA.community||{feed:[],sources:[],trending:{},perf:[],runs:[],counts:{},missing:true};
+const MKC={ml:"Moneyline",spread:"Spread",total:"Total",prop:"Player"}, STL={pending:"Pending",win:"Won",loss:"Lost",push:"Push",unknown:"Not settled"};
+const agoTxt=iso=>{const m=Math.max(0,(Date.now()-dt(iso))/60000);return m<60?Math.round(m)+" min ago":m<1440?Math.round(m/60)+" h ago":Math.round(m/1440)+" d ago"};
+const stPill=s=>`<span class="st ${s}">${STL[s]||h(s)}</span>`;
+function cFilters(parl){
+  const chip=(k,v,l)=>`<button class="chip ${S[k]===v?"on":""}" data-set="${k}" data-v="${v}">${l}</button>`;
+  return `<div class="row"><span class="lab">Sport</span>${["all","nfl","nba","soccer","cfb"].map(v=>chip("csp",v,SP[v])).join("")}</div>
+  <div class="row"><span class="lab">Bet type</span>${chip("cmk","all","All")}${Object.keys(MKC).map(v=>chip("cmk",v,MKC[v])).join("")}
+   <span class="lab" style="margin-left:10px">Posted</span>${chip("cday","all","Any time")}${chip("cday","24","Last 24 hours")}${chip("cday","today","Today")}
+   <span class="lab" style="margin-left:10px">Odds</span>${chip("codds","all","Any")}${chip("codds","yes","Stated in post")}</div>
+  ${parl?`<div class="row"><span class="lab">Legs</span>${chip("clegs","all","Any")}${chip("clegs","2","2")}${chip("clegs","3","3")}${chip("clegs","4","4 or more")}</div>`:""}
+  <div class="tools"><input type="search" id="q" placeholder="Search a team, player or account" value="${h(S.q)}" aria-label="Search a team, player or account"></div>`;
+}
+function cMatch(p){
+  const q=S.q.trim().toLowerCase(), t=dt(p.posted);
+  if(S.csp!=="all"&&!p.legs.some(l=>l.sp===S.csp)) return false;
+  if(S.cmk!=="all"&&!p.legs.some(l=>l.market===S.cmk)) return false;
+  if(S.cday==="24"&&Date.now()-t>864e5) return false;
+  if(S.cday==="today"&&dayKey(p.posted)!==dayKey(new Date().toISOString())) return false;
+  if(S.codds==="yes"&&p.total_odds==null&&!p.legs.some(l=>l.odds!=null)) return false;
+  if(S.clegs!=="all"){const n=p.legs_total||p.legs.length; if(S.clegs==="4"?n<4:n!==+S.clegs) return false}
+  if(q&&!(p.author+" "+p.name+" "+p.legs.map(l=>l.label+" "+l.game).join(" ")).toLowerCase().includes(q)) return false;
+  return true;
+}
+function cPost(p){
+  const parl=p.bet_type==="parlay", n=p.legs_total||p.legs.length;
+  return `<div class="card cpost"><div class="who"><span><b>${h(p.name||p.author)}</b> <span class="pm">@${h(p.author)} on Bluesky</span>${p.bot?'<span class="tag">automated account</span>':""}${p.dup?'<span class="tag">copy of another post</span>':""}</span><span class="pm">${agoTxt(p.posted)}</span></div>
+   <div class="row" style="margin:6px 0 2px"><span class="tier">${parl?(p.sgp?"Same-game parlay":"Parlay")+" · "+n+" legs":"Single bet"+(p.legs.length>1?"s":"")}</span>${parl?`<span class="pm">Combined odds as posted: <b>${p.total_odds!=null?am(p.total_odds):"not stated"}</b></span>`:""}<span class="pm">${p.stance==="placed"?"Says they placed it":"Recommendation"}</span>${stPill(p.st)}</div>
+   ${p.legs.map(l=>`<div class="cleg"><div><b>${h(l.label)}</b>${l.implied?'<span class="tag">read as moneyline</span>':""}<small>${h(SP[l.sp]||"")} · ${h(l.game)} · ${tm(l.start)} · ${MKC[l.market]}</small></div><div style="text-align:right">${l.odds!=null?`<b>${am(l.odds)}</b><br>`:""}${parl?stPill(l.st):""}</div></div>`).join("")}
+   ${p.partial?`<div class="pm" style="margin-top:6px">${p.legs.length} of ${n} legs shown. The others are in sports or games EdgeEngine does not track, so this parlay cannot be settled here.</div>`:""}
+   <div class="ex">${h(p.excerpt)}</div>
+   <div class="pm" style="margin-top:8px">${ext(h(p.url),"Open original post")} · posted ${tm(p.posted)} · not verified</div></div>`;
+}
+function communityTab(){
+  const C=CM(), cnt=C.counts||{}, src=(C.sources||[]).filter(s=>s.active), bad=src.filter(s=>s.last_error&&!s.last_ok||s.last_ok&&Date.now()-dt(s.last_ok)>3*36e5);
+  const head=`${C.missing?'<div class="warnbox">Community picks are not in the data yet. They appear after the next update.</div>':""}${C.error?`<div class="warnbox"><b>Heads up.</b> ${h(C.error)}</div>`:""}
+   ${bad.map(s=>`<div class="warnbox"><b>Heads up.</b> ${h(s.name)} could not be reached${s.last_ok?" since "+tm(s.last_ok):""}${s.last_error?" ("+h(s.last_error)+")":""}. Posts below may be out of date.</div>`).join("")}
+   <div class="warnbox">These are real posts by other people, collected from ${src.map(s=>h(s.platform)).join(", ")||"no connected source"} and matched to games on this site. They are not EdgeEngine picks, not verified and not advice. How many people post a bet says nothing about whether it wins. 21+.</div>`;
+  if(S.tab==="csrc") return head+cSources(C);
+  if(S.tab==="ctrend") return head+cTrend(C);
+  const parl=S.tab==="cparlays", list=(C.feed||[]).filter(p=>(parl?p.bet_type==="parlay":true)&&cMatch(p));
+  return head+`<h2>${parl?"Parlays people shared":"Newest picks people posted"}</h2><div class="note" style="margin:-6px 0 8px">${cnt.shown||0} posts from ${cnt.accounts||0} accounts in the last ${C.keep_days||7} days${C.asof?" · checked "+agoTxt(C.asof):""}.</div>
+   ${cFilters(parl)}${list.length?`<div class="grid">${list.slice(0,60).map(cPost).join("")}</div>`:`<div class="empty">${(C.feed||[]).length?"No posts match these filters.":"No posts matched to upcoming games yet. The collector checks on every update and only keeps posts it can tie to a game on this site."}</div>`}`;
+}
+function cTrend(C){
+  const T=C.trending||{}, bets=(T.bets||[]).filter(b=>(S.csp==="all"||b.sp===S.csp)&&(S.cmk==="all"||b.market===S.cmk));
+  const chip=(k,v,l)=>`<button class="chip ${S[k]===v?"on":""}" data-set="${k}" data-v="${v}">${l}</button>`;
+  const list=(t,rows,unit)=>`<div class="card"><div class="lab">${t}</div>${(rows||[]).map(r=>`<div class="cleg"><div><b>${h(SP[r.name]||r.name)}</b></div><div class="pm">${r.n} ${unit}${r.n===1?"":"s"}</div></div>`).join("")||'<div class="empty">Nothing yet</div>'}</div>`;
+  return `<h2>Most posted bets</h2><div class="note" style="margin:-6px 0 8px">Counted by separate accounts, not posts. Copies of the same text count once. "Share" compares only bets on the same game, bet type and line, and is shown from 3 accounts up.</div>
+   <div class="row"><span class="lab">Sport</span>${["all","nfl","nba","soccer","cfb"].map(v=>chip("csp",v,SP[v])).join("")}<span class="lab" style="margin-left:10px">Bet type</span>${chip("cmk","all","All")}${Object.keys(MKC).map(v=>chip("cmk",v,MKC[v])).join("")}</div>
+   <div class="card" style="overflow:auto"><table><tr><th>Bet</th><th>Game</th><th class="num">Accounts, 24h</th><th class="num">Accounts, 7d</th><th class="num">Change vs day before</th><th>Share of accounts on this line</th></tr>
+   ${bets.map(b=>`<tr><td><b>${h(b.label)}</b><div class="pm">${MKC[b.market]}</div></td><td>${h(b.game)}<div class="pm">${h(SP[b.sp]||"")} · ${tm(b.start)}</div></td><td class="num">${b.n24}</td><td class="num">${b.n7}</td><td class="num">${b.change>0?"+":""}${b.change}</td><td>${b.share!=null?`<div class="share"><i style="width:${Math.round(b.share*100)}%"></i></div><span class="pm">${pct(b.share)} of ${b.of} tracked accounts took this side</span>`:`<span class="pm">${b.n7} of ${b.of}, too few to compare</span>`}</td></tr>`).join("")||'<tr><td colspan="6" class="empty">No bets with these filters yet.</td></tr>'}</table></div>
+   <div class="grid" style="margin-top:14px">${list("Most mentioned teams",T.teams,"account")}${list("Most mentioned players",T.players,"account")}${list("Most active sports",T.sports,"post")}
+   <div class="card"><div class="lab">Most active accounts</div>${(T.authors||[]).slice(0,10).map(a=>`<div class="cleg"><div><b>${h(a.name)}</b><small>@${h(a.author)}</small></div><div class="pm">${a.posts} post${a.posts===1?"":"s"}, ${a.legs} bets</div></div>`).join("")||'<div class="empty">Nothing yet</div>'}</div></div>`;
+}
+function cSources(C){
+  const perf=C.perf||[], cnt=C.counts||{};
+  return `<h2>Results by account</h2><div class="note" style="margin:-6px 0 8px">Only game bets (moneyline, spread, total) settled from final scores. Player bets are not settled here. Small samples mean little.</div>
+   <div class="card" style="overflow:auto"><table><tr><th>Account</th><th class="num">Settled bets</th><th class="num">Won</th><th class="num">Lost</th><th class="num">Push</th><th class="num">Win rate</th></tr>
+   ${perf.map(r=>`<tr><td><b>${h(r.name)}</b> <span class="pm">@${h(r.author)}</span></td><td class="num">${r.n}</td><td class="num">${r.w}</td><td class="num">${r.l}</td><td class="num">${r.p}</td><td class="num">${r.rate==null?"n/a":pct(r.rate)}</td></tr>`).join("")||'<tr><td colspan="6" class="empty">No settled bets yet. Results appear after tracked games finish.</td></tr>'}</table></div>
+   <h2>Where the posts come from</h2><div class="card" style="overflow:auto"><table><tr><th>Source</th><th>Status</th><th>Last successful check</th><th class="num">Posts shown</th><th>What it needs</th><th>Notes</th></tr>
+   ${(C.sources||[]).map(s=>`<tr><td><b>${h(s.name)}</b><div class="pm">${h(s.platform)}</div></td><td>${s.active?(s.last_ok?'<span class="st win">Connected</span>':'<span class="st loss">Failing</span>'):'<span class="st">Not connected</span>'}</td><td>${s.last_ok?tm(s.last_ok):"Never"}${s.last_error?`<div class="pm">Last error: ${h(s.last_error)}</div>`:""}</td><td class="num">${s.posts||0}</td><td class="pm">${h(s.access)}</td><td class="pm">${h(s.basis)}</td></tr>`).join("")}</table></div>
+   <h2>Recent checks</h2><div class="card" style="overflow:auto"><table><tr><th>Time</th><th class="num">Posts read</th><th class="num">New</th><th class="num">Picks saved</th><th class="num">Held for review</th><th class="num">Repeats</th><th class="num">Removed</th><th>Errors</th></tr>
+   ${(C.runs||[]).map(r=>`<tr><td>${tm(r.t)}</td><td class="num">${r.found}</td><td class="num">${r.new}</td><td class="num">${r.saved}</td><td class="num">${r.review}</td><td class="num">${r.dupes}</td><td class="num">${r.removed}</td><td class="pm">${h((r.errors||[]).join("; "))||"None"}</td></tr>`).join("")||'<tr><td colspan="8" class="empty">No checks yet</td></tr>'}</table>
+   <div class="pm" style="margin-top:6px">${cnt.review||0} posts are held back because the bet could not be read with confidence. Posts are kept ${C.keep_days||7} days and removed if deleted at the source.</div></div>`;
+}
 const tier=p=>p>=0.7?"Very likely":p>=0.6?"High":p>=0.53?"Average":"Below average";
 function render(){
   const grp=GROUPS.find(g=>g[3].includes(S.tab))||GROUPS[0], label=Object.fromEntries(TABS);
@@ -730,7 +807,7 @@ function render(){
   const m=$("#main"), changed=S.lastTab!==S.tab, hadFocus=document.activeElement&&document.activeElement.id==="q";
   if(changed){m.style.animation="none"; void m.offsetWidth; m.style.animation=""; document.body.classList.remove("noanim"); setTimeout(()=>document.body.classList.add("noanim"),1300)}
   S.lastTab=S.tab;
-  m.innerHTML=(DATA.notices||[]).map(n=>`<div class="warnbox"><b>Heads up.</b> ${h(n)}</div>`).join("")+(S.tab==="board"?board():S.tab==="odds"?bestOdds():S.tab==="build"?builder():S.tab==="parlays"?parlays():S.tab==="trending"?trending():S.tab==="leaders"?leaders():S.tab==="copy"?copyTab():S.tab==="record"?record():S.tab==="model"?model():sportTab(S.tab))+
+  m.innerHTML=(DATA.notices||[]).map(n=>`<div class="warnbox"><b>Heads up.</b> ${h(n)}</div>`).join("")+(S.tab==="board"?board():S.tab==="odds"?bestOdds():S.tab==="build"?builder():S.tab==="parlays"?parlays():S.tab==="trending"?trending():S.tab==="leaders"?leaders():S.tab==="copy"?copyTab():["cfeed","cparlays","ctrend","csrc"].includes(S.tab)?communityTab():S.tab==="record"?record():S.tab==="model"?model():sportTab(S.tab))+
    `<footer><b>EdgeEngine</b> &middot; Probabilities are estimates from a statistical model and sportsbook prices. No pick is guaranteed, and past results do not ensure future ones. For entertainment and analysis; bet only what you can afford to lose. If gambling is causing problems, call 1-800-GAMBLER (US).</footer>`;
   if(hadFocus){const q=$("#q"); if(q){q.focus();q.setSelectionRange(q.value.length,q.value.length)}}
   slip(); $("#pcount").textContent=S.slip.length;
@@ -774,6 +851,7 @@ async function load(first){
   }
 }
 $("#theme").addEventListener("click",e=>{const r=document.documentElement,l=r.dataset.theme==="light";r.dataset.theme=l?"dark":"light";e.target.textContent=l?"Light mode":"Dark mode"});
+if(/community-picks/.test(location.pathname)||location.hash==="#community") S.tab="cfeed";
 if(DATA){chrome();render()}
 else if(window.EDGE_DATA_URL){$("#stamp").textContent="Loading picks";load(true);setInterval(()=>{if(!document.hidden)load(!DATA)},180000);document.addEventListener("visibilitychange",()=>{if(!document.hidden)load(!DATA)})}
 else $("#main").innerHTML='<div class="warnbox">No data source configured. Set EDGE_DATA_URL in config.js.</div>';
