@@ -3,6 +3,12 @@
   publish = "site"
   command = ""
 
+# /community-picks opens the Community section of the same page
+[[redirects]]
+  from = "/community-picks"
+  to = "/index.html"
+  status = 200
+
 [[headers]]
   for = "/*"
   [headers.values]

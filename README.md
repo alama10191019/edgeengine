@@ -20,6 +20,8 @@ Why not run the engine on Netlify itself: Netlify scheduled functions stop after
 | `.github/workflows/update.yml` | The 15-minute updater |
 | `netlify.toml` | Tells Netlify to publish `site/` |
 | `seed_state.b64` | Starting pick ledger, used on the first run only |
+| `community.py` | Collects and reads public picks and parlays (Python, no extra packages) |
+| `test_community.py` | Tests for `community.py` |
 
 ## Setup (about 15 minutes)
 
@@ -55,6 +57,16 @@ If the run fails on the last step with a permission error: **Settings > Actions 
 - **Model:** edit `engine.py`. The next scheduled run uses it. Netlify also redeploys on any commit to the main branch (15 credits), so batch your edits.
 - **Update frequency:** change the `cron` line in `update.yml`. GitHub's minimum is every 5 minutes, and it can start runs late when busy.
 - **Soccer look-ahead:** `SOCCER_DAYS` near the top of `engine.py`.
+
+## Community picks
+
+`community.py` runs inside every update. It searches public Bluesky posts for picks and parlays, keeps only bets it can tie to a game on the current slate, counts what is trending and settles game bets from final scores. The page shows them under **Community** (also at `/community-picks`).
+
+- Storage: `community_store.json.gz` on the `data` branch (posts for 7 days, source status, run log). There is no separate database or API server; the page reads everything from `data.json`.
+- Admin: edit the lists at the top of `community.py` on GitHub (`SOURCES`, `QUERIES`, `BLOCK_AUTHORS`, `BLOCK_POSTS`). To force a check, use **Actions > update-picks > Run workflow**.
+- Bets are read by fixed rules, not by an AI model. Posts that cannot be read with confidence are held back, not shown.
+- Reddit, Discord, Mastodon and pick websites are listed as sources but are off. Each needs credentials or permission first; see the Sources tab.
+- Tests: `python3 -m unittest test_community -v` (synthetic fixtures only).
 
 ## Things to know
 

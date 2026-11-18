@@ -527,7 +527,11 @@ def build_parlays(pool, tag):
     put("Value Treble" if len(val) >= 3 else "Value Double", val[:3], "The picks where the model sees the biggest edge over the sportsbook price.")
     price = [x for x in by_p if amer_to_dec(x["odds"]) >= 1.6]
     put("Long Shot 5-Leg", price[:5], "Five picks at meaningful prices. Low hit rate, large payout.")
-    put("Lottery 7-Leg", price[:7], "Seven legs. For fun only.")
+    put("Lottery 7-Leg", price[:7] if len(price) >= 7 else [], "Seven legs. For fun only.")
+    ladder = [x for x in by_p if amer_to_dec(x["odds"]) >= 1.2]   # skip prices too short to be worth a leg
+    for n in range(2, 11):
+        if len(ladder) >= n:
+            put(f"Best {n}-Leg", ladder[:n], f"The {n} most likely picks, one per game." + (" Long odds: all of them must win." if n >= 6 else ""))
     secs = {}
     for x in by_p:
         secs.setdefault(x["sp"], []).append(x)
@@ -1011,8 +1015,15 @@ def sport_parlays(games, props):
             pl.append(parlay("Player Double", spread[:2], "The two most likely player picks."))
         if len(spread) >= 3:
             pl.append(parlay("Player Treble", spread[:3], "Top three player picks, each a different player."))
-        if len(spread) >= 5:
-            pl.append(parlay("Player 5-Leg", spread[:5], "Five player picks. Lower chance, bigger payout."))
+        for n in (4, 5, 6, 7, 8, 9, 10):
+            if len(spread) >= n:
+                pl.append(parlay(f"Player {n}-Leg", spread[:n], f"The {n} most likely player picks, each a different player, at most two per game."))
+        if strong_ok := [b for b in sorted(best, key=lambda x: -x["p"]) if amer_to_dec(b["odds"]) >= 1.2]:
+            for n in (6, 8, 10):          # half game picks, half player picks from other games
+                gl = strong_ok[:n // 2]; ids = {b["eid"] for b in gl}
+                ol = [p for p in spread if p["eid"] not in ids][:n - len(gl)]
+                if len(gl) + len(ol) == n:
+                    combos.append(parlay(f"Mixed {n}-Leg", gl + ol, f"{len(gl)} game picks and {len(ol)} player picks from different games."))
         overs = [p for p in spread if p["sel"] == "over"]
         if len(overs) >= 3:
             pl.append(parlay("Overs Treble", overs[:3], "Three players projected to go over their line."))
@@ -1338,6 +1349,12 @@ def run(args):
         books_meta = fetch_odds_api(games, args.cache, now)
     except Exception as ex:
         books_meta = {"enabled": True, "error": type(ex).__name__, "asof": None, "remaining": None, "matched": 0}
+    try:   # community picks: real public posts, collected and matched to this slate (community.py)
+        import community
+        community_data = community.run(games, props, S["results"], os.path.join(os.path.dirname(os.path.abspath(args.state)), "community_store.json.gz"), now, roster_fn=_roster,
+                                       schedule=[(LEAGUES[lg][0], ev[sd]["id"], ev["date"]) for lg in window for ev in window[lg] for sd in ("home", "away")])
+    except Exception as ex:
+        community_data = {"error": f"Community picks failed: {type(ex).__name__}", "feed": [], "sources": [], "trending": {}, "perf": [], "runs": [], "counts": {}}
     led = {k: S[k] for k in LEDGER_KEYS}
     led["calib"] = {k: v for k, v in S["calib"].items() if not k.endswith(":ml")}; led["version"] = 2
     save_state(led, args.state)
@@ -1349,7 +1366,7 @@ def run(args):
             "daily": S["daily"], "backtest": S["backtest"], "recent": recent, "past_parlays": [p for p in past_parlays if p["parlays"]],
             "parlay_perf": S["parlay_perf"], "model": model, "log": S["log"][::-1], "calib": {k: {"a": v["a"], "n": v["n"]} for k, v in S["calib"].items()},
             "blend": {k: v.get("w") for k, v in S["blend"].items()}, "default_blend": DEFAULT_BLEND, "soccer_days": SOCCER_DAYS, "markets": markets, "notices": notices, "books_meta": books_meta, "props": props, "props_meta": props_meta, "prop_perf": S["prop_perf"],
-            "sport_parlays": sp_parlays, "props_recent": sorted([p for p in S["props"].values() if p["st"] in ("win", "loss", "push")], key=lambda p: p["d"], reverse=True)[:120]}
+            "sport_parlays": sp_parlays, "community": community_data, "props_recent": sorted([p for p in S["props"].values() if p["st"] in ("win", "loss", "push")], key=lambda p: p["d"], reverse=True)[:120]}
     if args.data:
         json.dump(data, open(args.data, "w"), separators=(",", ":"))
     if args.template and args.out:  # single-file dashboard with the data baked in
